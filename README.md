@@ -272,6 +272,14 @@ AI building AI. Now in everyone's hands.
 
 ---
 
+## Contributors
+
+<a href="https://github.com/openkursar/hello-halo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=openkursar/hello-halo" />
+</a>
+
+Made with ❤️ by our contributors.
+
 <div align="center">
 
 ### Built by AI, for humans.
