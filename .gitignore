@@ -32,3 +32,4 @@ website/
 
 # OS files
 .DS_Store
+RELEASE_NOTES.md
