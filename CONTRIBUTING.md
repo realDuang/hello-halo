@@ -42,6 +42,12 @@ src/
 
 ## Code Guidelines
 
+### Language
+
+- **Code & Comments**: Must be in English (for i18n compatibility)
+- **Commit messages**: English preferred
+- **Issue/PR**: English, 中文, 日本語, Deutsch, Français, Español are welcome
+
 ### Styling
 
 Use Tailwind CSS with theme variables:
@@ -56,17 +62,19 @@ Use Tailwind CSS with theme variables:
 
 ### Internationalization
 
-All user-facing text must use `t()`:
+All user-facing text must use `t()` for i18n support:
 
 ```tsx
 // Good
 <Button>{t('Save')}</Button>
 
-// Bad
+// Bad - hardcoded text breaks i18n
 <Button>Save</Button>
 ```
 
 Run `npm run i18n` before committing to extract new strings.
+
+**Important**: Never hardcode user-facing strings. The app supports multiple languages.
 
 ### Adding IPC Channels
 
