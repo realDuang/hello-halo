@@ -686,14 +686,13 @@ body {
   line-height: 1.5;
 }
 
-/* Artifact card hover effect */
+/* Artifact card hover effect - subtle, no movement to avoid jitter */
 .artifact-card {
-  transition: all 0.2s ease;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .artifact-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px hsl(var(--background) / 0.5);
+  box-shadow: 0 2px 8px hsl(var(--foreground) / 0.08);
 }
 
 /* Input focus styles */

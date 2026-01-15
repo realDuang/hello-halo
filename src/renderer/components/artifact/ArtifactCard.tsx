@@ -126,7 +126,7 @@ export function ArtifactCard({ artifact }: ArtifactCardProps) {
     >
       <div className="flex items-center gap-2.5">
         {/* Icon */}
-        <div className={`transition-transform duration-200 ${isHovered ? 'scale-110' : ''}`}>
+        <div>
           <FileIcon extension={artifact.extension} isFolder={isFolder} size={18} />
         </div>
 
@@ -162,13 +162,6 @@ export function ArtifactCard({ artifact }: ArtifactCardProps) {
           )
         )}
       </div>
-
-      {/* Preview (for text files) */}
-      {artifact.preview && isHovered && (
-        <div className="mt-2 p-2 bg-background/50 rounded text-xs text-muted-foreground font-mono overflow-hidden max-h-16">
-          <pre className="truncate">{artifact.preview.substring(0, 100)}</pre>
-        </div>
-      )}
     </div>
   )
 }
