@@ -245,6 +245,8 @@ npm run dev
 - [GitHub Discussions](https://github.com/openkursar/hello-halo/discussions) — 问题与想法
 - [Issues](https://github.com/openkursar/hello-halo/issues) — Bug 报告与功能请求
 
+ ![wecom-temp-176413-bb326668e7f58a19928291322e42ac79](https://github.com/user-attachments/assets/915427da-1b61-4b91-a7a0-30e47f897eee)
+
 ---
 
 ## 许可证
