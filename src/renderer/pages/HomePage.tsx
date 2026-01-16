@@ -2,7 +2,7 @@
  * Home Page - Space list view
  */
 
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { useAppStore } from '../stores/app.store'
 import { useSpaceStore } from '../stores/space.store'
 import { SPACE_ICONS, DEFAULT_SPACE_ICON } from '../types'
@@ -58,16 +58,34 @@ export function HomePage() {
           setDefaultPath(res.data as string)
         }
       })
+      // Focus the space name input when dialog opens
+      setTimeout(() => {
+        spaceNameInputRef.current?.focus()
+      }, 100)
     }
   }, [showCreateDialog])
+
+  // Ref for space name input
+  const spaceNameInputRef = useRef<HTMLInputElement>(null)
 
   // Handle folder selection
   const handleSelectFolder = async () => {
     if (isWebMode) return // Disabled in web mode
     const res = await api.selectFolder()
     if (res.success && res.data) {
-      setCustomPath(res.data as string)
+      const path = res.data as string
+      setCustomPath(path)
       setUseCustomPath(true)
+      // Extract directory name as suggested space name
+      const dirName = path.split('/').pop() || ''
+      if (dirName && !newSpaceName.trim()) {
+        setNewSpaceName(dirName)
+      }
+      // Focus the space name input
+      setTimeout(() => {
+        spaceNameInputRef.current?.focus()
+        spaceNameInputRef.current?.select()
+      }, 100)
     }
   }
 
@@ -293,19 +311,6 @@ export function HomePage() {
           <div className="bg-card border border-border rounded-xl p-6 w-full max-w-md animate-fade-in">
             <h2 className="text-lg font-medium mb-4">{t('Create Dedicated Space')}</h2>
 
-            {/* Space name */}
-            <div className="mb-4">
-              <label className="block text-sm text-muted-foreground mb-2">{t('Space Name')}</label>
-              <input
-                type="text"
-                value={newSpaceName}
-                onChange={(e) => setNewSpaceName(e.target.value)}
-                placeholder={t('My Project')}
-                className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
-                autoFocus
-              />
-            </div>
-
             {/* Icon select */}
             <div className="mb-4">
               <label className="block text-sm text-muted-foreground mb-2">{t('Icon (optional)')}</label>
@@ -342,7 +347,12 @@ export function HomePage() {
                     type="radio"
                     name="pathType"
                     checked={!useCustomPath}
-                    onChange={() => setUseCustomPath(false)}
+                    onChange={() => {
+                      setUseCustomPath(false)
+                      setTimeout(() => {
+                        spaceNameInputRef.current?.focus()
+                      }, 100)
+                    }}
                     className="w-4 h-4 text-primary"
                   />
                   <div className="flex-1 min-w-0">
@@ -403,6 +413,19 @@ export function HomePage() {
                   )}
                 </label>
               </div>
+            </div>
+
+            {/* Space name - moved to bottom, above create button */}
+            <div className="mb-6">
+              <label className="block text-sm text-muted-foreground mb-2">{t('Name this space')}</label>
+              <input
+                ref={spaceNameInputRef}
+                type="text"
+                value={newSpaceName}
+                onChange={(e) => setNewSpaceName(e.target.value)}
+                placeholder={t('My Project')}
+                className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
+              />
             </div>
 
             {/* Actions */}
