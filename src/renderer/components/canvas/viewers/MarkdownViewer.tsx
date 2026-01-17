@@ -268,16 +268,16 @@ function SourceView({ content }: { content: string }) {
   return (
     <div className="flex font-mono text-sm">
       {/* Line numbers */}
-      <div className="sticky left-0 flex-shrink-0 select-none bg-background/80 backdrop-blur-sm border-r border-border/50 text-right text-muted-foreground/40 text-xs pr-3 pl-4 py-4">
+      <div className="sticky left-0 flex-shrink-0 select-none bg-background/80 backdrop-blur-sm border-r border-border/50 text-right text-muted-foreground/40 pr-3 pl-4 py-4 leading-6">
         {lines.map((_, i) => (
-          <div key={i + 1} className="leading-6">
+          <div key={i + 1}>
             {i + 1}
           </div>
         ))}
       </div>
 
       {/* Content */}
-      <pre className="flex-1 p-4 overflow-x-auto whitespace-pre-wrap break-words">
+      <pre className="flex-1 py-4 pl-4 pr-4 overflow-x-auto whitespace-pre-wrap break-words leading-6 m-0">
         {content}
       </pre>
     </div>

@@ -299,19 +299,19 @@ function SourceView({ content, lineCount }: { content: string; lineCount: number
   return (
     <div className="flex min-h-full font-mono text-sm">
       {/* Line numbers */}
-      <div className="sticky left-0 flex-shrink-0 select-none bg-background/80 backdrop-blur-sm border-r border-border/50 text-right text-muted-foreground/40 text-xs pr-3 pl-4 py-4">
+      <div className="sticky left-0 flex-shrink-0 select-none bg-background/80 backdrop-blur-sm border-r border-border/50 text-right text-muted-foreground/40 pr-3 pl-4 py-4 leading-6">
         {Array.from({ length: lineCount }, (_, i) => (
-          <div key={i + 1} className="leading-6">
+          <div key={i + 1}>
             {i + 1}
           </div>
         ))}
       </div>
 
       {/* Content */}
-      <pre className="flex-1 p-4 overflow-x-auto">
-        <code className="text-foreground">
+      <pre className="flex-1 py-4 pl-4 pr-4 overflow-x-auto m-0">
+        <code className="text-foreground leading-6 block">
           {lines.map((line, i) => (
-            <div key={i} className="leading-6">
+            <div key={i}>
               {line || ' '}
             </div>
           ))}

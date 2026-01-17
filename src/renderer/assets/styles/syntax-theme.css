@@ -8,6 +8,7 @@ pre code.hljs {
   display: block;
   overflow-x: auto;
   padding: 0;
+  line-height: 1.5rem; /* 24px - matches line number row height */
 }
 
 code.hljs {
