@@ -7,8 +7,10 @@ Fixes #
 
 ## Testing
 <!-- How did you test these changes? -->
-- [ ] Tested locally with `npm run dev`
+- [ ] Ran `npm run dev`
+- [ ] Tested locally with ` "test:unit"`
 - [ ] Ran `npm run i18n` (if added new text)
+- [ ] Ran `test:e2e:smoke` (Optional, recommended for large changes)
 
 ## Screenshots (if applicable)
 <!-- Add screenshots for UI changes -->

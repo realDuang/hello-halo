@@ -206,6 +206,8 @@ The barrier isn't AI capability anymore. **It's accessibility.** Halo removes th
 | Agent Core | @anthropic-ai/claude-code SDK |
 | Markdown | react-markdown + highlight.js |
 
+> **Powered by [Claude Code](https://github.com/anthropics/claude-code)** — Thanks to Anthropic for building the most capable AI agent.
+
 ---
 
 ## Roadmap
