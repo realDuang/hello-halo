@@ -14,9 +14,9 @@ async function navigateToChat(window: any) {
   await window.waitForSelector('#root', { timeout: 10000 })
   await window.waitForLoadState('networkidle')
 
-  // Look for "进入 Halo" text button
+  // Look for "Enter Halo" or "进入 Halo" text button (supports both EN and CN)
   let enterHalo = await window.waitForSelector(
-    'text=/进入 Halo/',
+    'text=/Enter Halo|进入 Halo/i',
     { timeout: 5000 }
   ).catch(() => null)
 
@@ -48,7 +48,8 @@ async function navigateToRemoteSettings(window: any) {
   await window.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
   await window.waitForTimeout(500)
 
-  await window.waitForSelector('text=/远程访问/i', { timeout: 10000 })
+  // Support both EN and CN: "Remote Access" or "远程访问"
+  await window.waitForSelector('text=/Remote Access|远程访问/i', { timeout: 10000 })
 }
 
 /**
@@ -61,7 +62,8 @@ async function clickRemoteToggle(window: any) {
       const checkbox = label.querySelector('input[type="checkbox"]')
       if (checkbox) {
         const parent = label.closest('div')
-        if (parent && parent.textContent?.includes('启用远程访问')) {
+        // Support both EN and CN: "Enable Remote Access" or "启用远程访问"
+        if (parent && (parent.textContent?.includes('启用远程访问') || parent.textContent?.includes('Enable Remote Access'))) {
           label.click()
           break
         }
@@ -219,8 +221,8 @@ test.describe('Core Features', () => {
     // Wait for AI message
     await window.waitForSelector('.message-assistant', { timeout: 30000 })
 
-    // Wait for AI to finish working
-    await window.waitForSelector('text="Halo 工作中"', { state: 'hidden', timeout: 45000 }).catch(() => {})
+    // Wait for AI to finish working (supports both EN and CN)
+    await window.waitForSelector('text=/Halo 工作中|Halo is working/i', { state: 'hidden', timeout: 45000 }).catch(() => {})
 
     // Verify AI response contains expected content
     const assistantMessage = await window.waitForSelector('.message-assistant', { timeout: 5000 })
@@ -237,19 +239,19 @@ test.describe('Core Features', () => {
     await clickRemoteToggle(window)
     await window.waitForTimeout(2000)
 
-    // Wait for LAN section
-    await window.waitForSelector('text=/本机地址|局域网地址/i', { timeout: 15000 })
+    // Wait for LAN section (supports both EN and CN)
+    await window.waitForSelector('text=/本机地址|局域网地址|Local Address|LAN Address/i', { timeout: 15000 })
 
     await window.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
     await window.waitForTimeout(500)
 
-    // Click tunnel button
-    const tunnelButton = await window.waitForSelector('button:has-text("启动隧道")', { timeout: 10000 })
+    // Click tunnel button (supports both EN and CN)
+    const tunnelButton = await window.waitForSelector('button:has-text("启动隧道"), button:has-text("Start Tunnel")', { timeout: 10000 })
     await tunnelButton.click()
 
-    // Wait for public URL
+    // Wait for public URL (supports both EN and CN)
     const publicUrl = await window.waitForSelector(
-      'text=/\\.trycloudflare\\.com|公网地址/i',
+      'text=/\\.trycloudflare\\.com|公网地址|Public URL/i',
       { timeout: 30000 }
     ).catch(() => null)
 
