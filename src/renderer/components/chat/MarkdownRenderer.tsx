@@ -56,9 +56,9 @@ function CodeBlock({
 
   // Code block
   return (
-    <div className="group relative my-3 rounded-xl overflow-hidden border border-border/50 bg-[#0d1117]">
+    <div className="group relative my-3 rounded-xl overflow-hidden border border-border/50 bg-card">
       {/* Header with language and copy button */}
-      <div className="flex items-center justify-between px-4 py-2 bg-[#161b22] border-b border-border/30">
+      <div className="flex items-center justify-between px-4 py-2 bg-secondary border-b border-border/30">
         <span className="text-xs text-muted-foreground/70 font-mono uppercase tracking-wide">
           {language || 'code'}
         </span>
