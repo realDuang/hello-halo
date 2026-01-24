@@ -2,13 +2,11 @@
  * Agent IPC Handlers
  */
 
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain } from 'electron'
 import { sendMessage, stopGeneration, handleToolApproval, getSessionState, ensureSessionWarm, testMcpConnections } from '../services/agent'
+import { getMainWindow } from '../services/window.service'
 
-let mainWindow: BrowserWindow | null = null
-
-export function registerAgentHandlers(window: BrowserWindow | null): void {
-  mainWindow = window
+export function registerAgentHandlers(): void {
 
   // Send message to agent (with optional images for multi-modal, optional thinking mode)
   ipcMain.handle(
@@ -32,7 +30,7 @@ export function registerAgentHandlers(window: BrowserWindow | null): void {
       }
     ) => {
       try {
-        await sendMessage(mainWindow, request)
+        await sendMessage(getMainWindow(), request)
         return { success: true }
       } catch (error: unknown) {
         const err = error as Error
@@ -102,7 +100,7 @@ export function registerAgentHandlers(window: BrowserWindow | null): void {
   // Test MCP server connections
   ipcMain.handle('agent:test-mcp', async () => {
     try {
-      const result = await testMcpConnections(mainWindow)
+      const result = await testMcpConnections(getMainWindow())
       return result
     } catch (error: unknown) {
       const err = error as Error

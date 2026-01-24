@@ -28,6 +28,7 @@
  */
 
 import { api } from '../api'
+import { isBinaryExtension } from '../constants/file-types'
 
 // ============================================
 // Types
@@ -68,6 +69,7 @@ export interface TabState {
   scrollPosition?: number
   browserViewId?: string
   browserState?: BrowserState
+  isEditMode?: boolean // For markdown tabs - switches between preview and editor
 }
 
 // Callback types
@@ -83,14 +85,46 @@ type OpenStateChangeCallback = (isOpen: boolean) => void
 /**
  * Detect content type from file extension
  */
-function detectContentType(path: string): { type: ContentType; language?: string } {
+function detectContentType(path: string): { type: ContentType; language?: string; needsBackendDetection?: boolean } {
   const ext = path.split('.').pop()?.toLowerCase() || ''
+  const filename = path.split('/').pop()?.toLowerCase() || ''
+
+  // Special filenames without extensions
+  const specialFiles: Record<string, string> = {
+    dockerfile: 'dockerfile',
+    makefile: 'makefile',
+    gemfile: 'ruby',
+    rakefile: 'ruby',
+    podfile: 'ruby',
+    vagrantfile: 'ruby',
+    jenkinsfile: 'groovy',
+    '.gitignore': 'gitignore',
+    '.dockerignore': 'gitignore',
+    '.editorconfig': 'ini',
+    '.env': 'shell',
+    '.env.local': 'shell',
+    '.env.development': 'shell',
+    '.env.production': 'shell',
+  }
+
+  if (specialFiles[filename]) {
+    return { type: 'code', language: specialFiles[filename] }
+  }
 
   const codeExtensions: Record<string, string> = {
+    // JavaScript/TypeScript
     js: 'javascript',
     jsx: 'javascript',
     ts: 'typescript',
     tsx: 'typescript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+
+    // Web frameworks
+    vue: 'vue',
+    svelte: 'svelte',
+
+    // Systems programming
     py: 'python',
     rb: 'ruby',
     go: 'go',
@@ -103,16 +137,113 @@ function detectContentType(path: string): { type: ContentType; language?: string
     cs: 'csharp',
     swift: 'swift',
     kt: 'kotlin',
+    kts: 'kotlin',
+    scala: 'scala',
+    dart: 'dart',
+    m: 'objectivec', // Objective-C
+    mm: 'objectivec',
+    d: 'd',
+    cr: 'crystal', // Crystal
+
+    // Scripting
     php: 'php',
+    lua: 'lua',
+    pl: 'perl',
+    pm: 'perl',
+    r: 'r',
+    R: 'r',
+    rmd: 'r',
+    hs: 'haskell',
+    tcl: 'tcl',
+
+    // Shell & PowerShell
     sh: 'bash',
     bash: 'bash',
     zsh: 'bash',
+    ps1: 'powershell',
+    psm1: 'powershell',
+    psd1: 'powershell',
+
+    // Data & Config
     sql: 'sql',
     yaml: 'yaml',
     yml: 'yaml',
     xml: 'xml',
-    vue: 'vue',
-    svelte: 'svelte',
+    toml: 'toml',
+    ini: 'ini',
+    conf: 'ini',
+    properties: 'properties',
+    proto: 'protobuf',
+
+    // Functional languages
+    clj: 'clojure',
+    cljs: 'clojure',
+    cljc: 'clojure',
+    edn: 'clojure',
+    erl: 'erlang',
+    hrl: 'erlang',
+    ex: 'elixir',
+    exs: 'elixir',
+    elm: 'elm',
+
+    // ML-like languages
+    fs: 'fsharp',
+    fsi: 'fsharp',
+    fsx: 'fsharp',
+    ml: 'ocaml',
+    mli: 'ocaml',
+    sml: 'sml',
+
+    // Scientific computing
+    jl: 'julia',
+    f: 'fortran',
+    f90: 'fortran',
+    f95: 'fortran',
+    for: 'fortran',
+
+    // Pascal/Delphi
+    pas: 'pascal',
+    dpr: 'pascal',
+
+    // Visual Basic
+    vb: 'vb',
+    vbs: 'vbscript',
+    bas: 'vb',
+
+    // Lisp/Scheme
+    scm: 'scheme',
+    rkt: 'scheme',
+    lisp: 'lisp',
+    lsp: 'lisp',
+    cl: 'lisp',
+
+    // CSS preprocessors & templates
+    sass: 'sass',
+    styl: 'stylus',
+    pug: 'pug',
+    jade: 'pug',
+
+    // Alt-JS
+    coffee: 'coffeescript',
+
+    // Hardware description
+    v: 'verilog',
+    sv: 'verilog',
+    vhd: 'vhdl',
+    vhdl: 'vhdl',
+
+    // DevOps
+    pp: 'puppet',
+    nsh: 'nsis',
+
+    // Other
+    diff: 'diff',
+    patch: 'diff',
+    dockerfile: 'dockerfile',
+    groovy: 'groovy',
+
+    // Lock files (JSON/YAML-like)
+    lock: 'json', // package-lock.json, yarn.lock, etc.
   }
 
   if (codeExtensions[ext]) {
@@ -150,7 +281,8 @@ function detectContentType(path: string): { type: ContentType; language?: string
     case 'env':
       return { type: 'text' }
     default:
-      return { type: 'text' }
+      // Unknown extension - needs backend detection for binary vs text
+      return { type: 'text', needsBackendDetection: true }
   }
 }
 
@@ -285,6 +417,7 @@ class CanvasLifecycle {
 
   /**
    * Open a file in the canvas
+   * Uses fast path for known extensions, backend detection for unknown ones
    */
   async openFile(path: string, title?: string): Promise<string> {
     // Check if file is already open
@@ -295,8 +428,43 @@ class CanvasLifecycle {
       }
     }
 
-    // Detect content type
-    const { type, language } = detectContentType(path)
+    const ext = path.split('.').pop()?.toLowerCase() || ''
+
+    // Fast path: known binary extensions - open with system app
+    if (isBinaryExtension(ext)) {
+      console.log(`[CanvasLifecycle] Known binary extension: ${ext}, opening with system`)
+      await api.openArtifact(path)
+      return ''
+    }
+
+    // Detect content type from extension
+    let { type, language, needsBackendDetection } = detectContentType(path)
+
+    // For unknown extensions, use backend detection
+    if (needsBackendDetection) {
+      console.log(`[CanvasLifecycle] Unknown extension: ${ext}, using backend detection`)
+      try {
+        const response = await api.detectFileType(path)
+        if (response.success && response.data) {
+          const info = response.data
+          console.log(`[CanvasLifecycle] Backend detection result:`, info)
+
+          // If backend says it's binary, open with system app
+          if (!info.canViewInCanvas) {
+            console.log(`[CanvasLifecycle] File is binary, opening with system`)
+            await api.openArtifact(path)
+            return ''
+          }
+
+          // Use backend-detected content type
+          type = info.contentType as ContentType
+          language = info.language
+        }
+      } catch (error) {
+        console.warn(`[CanvasLifecycle] Backend detection failed, falling back to text:`, error)
+        // Fall back to text type on error
+      }
+    }
 
     // PDF files are opened via BrowserView (Chromium native PDF renderer)
     if (type === 'pdf') {
@@ -903,6 +1071,20 @@ class CanvasLifecycle {
   }
 
   /**
+   * Mark tab as saved (clear dirty flag)
+   */
+  markTabSaved(tabId: string, content?: string): void {
+    const tab = this.tabs.get(tabId)
+    if (tab) {
+      if (content !== undefined) {
+        tab.content = content
+      }
+      tab.isDirty = false
+      this.notifyTabsChange()
+    }
+  }
+
+  /**
    * Save scroll position
    */
   saveScrollPosition(tabId: string, position: number): void {
@@ -910,6 +1092,28 @@ class CanvasLifecycle {
     if (tab) {
       tab.scrollPosition = position
       // No need to notify for scroll position updates
+    }
+  }
+
+  /**
+   * Toggle edit mode for markdown tabs
+   */
+  toggleEditMode(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (tab && tab.type === 'markdown') {
+      tab.isEditMode = !tab.isEditMode
+      this.notifyTabsChange()
+    }
+  }
+
+  /**
+   * Set edit mode for a tab
+   */
+  setEditMode(tabId: string, editMode: boolean): void {
+    const tab = this.tabs.get(tabId)
+    if (tab) {
+      tab.isEditMode = editMode
+      this.notifyTabsChange()
     }
   }
 

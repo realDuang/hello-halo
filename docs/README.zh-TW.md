@@ -4,11 +4,12 @@
 
 # Halo
 
-### Claude Code 的圖形介面
+### Open Source Cowork for Everyone
 
-把 Claude Code 裝進口袋 — 開源桌面用戶端，讓每個人都能輕鬆使用 Claude Code 的強大能力。告別終端機。
 
-**我們的理念：** 將複雜技術封裝成符合直覺的人類互動。
+無需接觸終端機，即可體驗 AI Agent 的全部能力。Halo 為所有人帶來可視化、跨平台的桌面體驗 — 開源且免費。
+
+> **我們的理念：** 將複雜技術封裝成符合直覺的人類互動。
 
 [![GitHub Stars](https://img.shields.io/github/stars/openkursar/hello-halo?style=social)](https://github.com/openkursar/hello-halo/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
@@ -125,7 +126,7 @@
 | 平台 | 下載 | 要求 |
 |----------|----------|--------------|
 | **macOS** (Apple Silicon) | [下載 .dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 11+ |
-| **macOS** (Intel) | 即將推出 | macOS 11+ |
+| **macOS** (Intel) | [下載 .dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 11+ |
 | **Windows** | [下載 .exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+ |
 | **Linux** | [下載 .AppImage](https://github.com/openkursar/hello-halo/releases/latest) | Ubuntu 20.04+ |
 | **Web** (PC/行動端) | 在桌面應用程式中啟用遠端存取 | 任何現代瀏覽器 |
@@ -178,6 +179,8 @@ npm run dev
 - **無需後端** — 純桌面用戶端，使用你自己的 API 金鑰
 - **真正的 Agent 迴圈** — 工具執行，而不只是文字生成
 
+> **Powered by [Claude Code](https://github.com/anthropics/claude-code)** — 感謝 Anthropic 打造最強大的 AI Agent。
+
 ---
 
 ## 使用者在用 Halo 做什麼
@@ -190,19 +193,6 @@ Halo 不只是給開發者用的。我們看到：
 - **開發者** 以前所未有的速度交付功能
 
 障礙不再是 AI 的能力，**而是可及性**。Halo 消除了這個障礙。
-
----
-
-## 技術棧
-
-| 層 | 技術 |
-|-------|------------|
-| 框架 | Electron + electron-vite |
-| 前端 | React 18 + TypeScript |
-| 樣式 | Tailwind CSS + shadcn/ui 風格 |
-| 狀態管理 | Zustand |
-| Agent 核心 | @anthropic-ai/claude-code SDK |
-| Markdown | react-markdown + highlight.js |
 
 ---
 
@@ -263,7 +253,7 @@ MIT 授權條款 — 詳見 [LICENSE](../LICENSE)。
 
 然後又遇到另一個問題 — 我的非技術同事看到 Claude Code 能做什麼後也想試試。但他們卡在了安裝環節。*「什麼是 npm？怎麼安裝 Node.js？」* 有些人花了好幾天也沒搞定。
 
-所以我為自己做了 Halo：
+所以我為自己和朋友做了 Halo：
 - **視覺化介面** — 不用再盯著終端輸出
 - **一鍵安裝** — 不需要 Node.js，不需要 npm，下載即用
 - **遠端存取** — 從手機、平板或任何瀏覽器控制
@@ -273,6 +263,14 @@ MIT 授權條款 — 詳見 [LICENSE](../LICENSE)。
 AI 建構 AI。現在人人可用。
 
 ---
+
+## 貢獻者
+
+<a href="https://github.com/openkursar/hello-halo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=openkursar/hello-halo" />
+</a>
+
+Made with ❤️ by our contributors.
 
 <div align="center">
 

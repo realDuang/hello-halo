@@ -8,11 +8,12 @@ import { createServer, Server, request as httpRequest, IncomingMessage } from 'h
 import { join } from 'path'
 import { BrowserWindow } from 'electron'
 import { is } from '@electron-toolkit/utils'
-import { createConnection } from 'net'
+import { createConnection, createServer as createNetServer } from 'net'
 
 import { authMiddleware, generateAccessToken, getAccessToken, clearAccessToken, validateToken } from './auth'
 import { initWebSocket, shutdownWebSocket, getClientCount } from './websocket'
 import { registerApiRoutes } from './routes'
+import { getMainWindow as getMainWindowFromService } from '../services/window.service'
 
 // Vite dev server URL
 const VITE_DEV_SERVER = 'http://localhost:5173'
@@ -23,20 +24,62 @@ const VITE_DEV_PORT = 5173
 let httpServer: Server | null = null
 let expressApp: Express | null = null
 let serverPort: number = 0
-let mainWindow: BrowserWindow | null = null
 
 // Default port
 const DEFAULT_PORT = 3847
+const MAX_PORT_SEARCH_ATTEMPTS = 20
+
+async function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = createNetServer()
+    tester.once('error', () => {
+      tester.close(() => resolve(false))
+    })
+    tester.once('listening', () => {
+      tester.close(() => resolve(true))
+    })
+    tester.listen(port, '0.0.0.0')
+  })
+}
+
+async function findAvailablePort(startPort: number): Promise<number> {
+  for (let i = 0; i < MAX_PORT_SEARCH_ATTEMPTS; i++) {
+    const portToTry = startPort + i
+    // eslint-disable-next-line no-await-in-loop
+    const available = await isPortAvailable(portToTry)
+    if (available) {
+      if (i > 0) {
+        console.warn(`[HTTP] Port ${startPort} is in use, falling back to ${portToTry}`)
+      }
+      return portToTry
+    }
+  }
+  throw new Error(`Unable to find available port near ${startPort}`)
+}
+
+function cleanupServerOnError(): void {
+  shutdownWebSocket()
+  if (httpServer) {
+    try {
+      httpServer.removeAllListeners('error')
+      httpServer.close()
+    } catch (err) {
+      console.warn('[HTTP] Error closing server after failure:', (err as Error).message)
+    }
+    httpServer = null
+  }
+  expressApp = null
+  serverPort = 0
+  clearAccessToken()
+}
 
 /**
  * Start the HTTP server
  */
 export async function startHttpServer(
-  window: BrowserWindow | null,
   port: number = DEFAULT_PORT
 ): Promise<{ port: number; token: string }> {
-  // Store reference to main window for agent calls
-  mainWindow = window
+  const listenPort = await findAvailablePort(port)
 
   // Create Express app
   expressApp = express()
@@ -84,7 +127,7 @@ export async function startHttpServer(
   expressApp.use('/api', authMiddleware)
 
   // Register API routes
-  registerApiRoutes(expressApp, mainWindow)
+  registerApiRoutes(expressApp, getMainWindowFromService())
 
   // Serve static files (frontend)
   if (is.dev) {
@@ -234,20 +277,20 @@ export async function startHttpServer(
 
   // Start listening
   return new Promise((resolve, reject) => {
-    httpServer!.listen(port, '0.0.0.0', () => {
-      serverPort = port
-      console.log(`[HTTP] Server started on port ${port}`)
+    httpServer!.listen(listenPort, '0.0.0.0', () => {
+      serverPort = listenPort
+      console.log(`[HTTP] Server started on port ${listenPort}`)
       console.log(`[HTTP] Access token: ${token}`)
-      resolve({ port, token })
+      resolve({ port: listenPort, token })
     })
 
     httpServer!.on('error', (error: NodeJS.ErrnoException) => {
+      console.error('[HTTP] Server error:', error.message)
+      cleanupServerOnError()
       if (error.code === 'EADDRINUSE') {
-        // Try next port
-        console.log(`[HTTP] Port ${port} in use, trying ${port + 1}`)
-        startHttpServer(window, port + 1)
-          .then(resolve)
-          .catch(reject)
+        const nextPort = listenPort + 1
+        console.log(`[HTTP] Port ${listenPort} still in use, trying ${nextPort}`)
+        startHttpServer(nextPort).then(resolve).catch(reject)
       } else {
         reject(error)
       }
@@ -298,7 +341,7 @@ export function getServerInfo(): {
  * Get main window reference (for agent controller)
  */
 export function getMainWindow(): BrowserWindow | null {
-  return mainWindow
+  return getMainWindowFromService()
 }
 
 /**

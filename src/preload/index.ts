@@ -109,15 +109,33 @@ export interface HaloAPI {
   onAgentComplete: (callback: (data: unknown) => void) => () => void
   onAgentThinking: (callback: (data: unknown) => void) => () => void
   onAgentThought: (callback: (data: unknown) => void) => () => void
+  onAgentThoughtDelta: (callback: (data: unknown) => void) => () => void
   onAgentMcpStatus: (callback: (data: unknown) => void) => () => void
   onAgentCompact: (callback: (data: unknown) => void) => () => void
 
   // Artifact
   listArtifacts: (spaceId: string) => Promise<IpcResponse>
   listArtifactsTree: (spaceId: string) => Promise<IpcResponse>
+  loadArtifactChildren: (spaceId: string, dirPath: string) => Promise<IpcResponse>
+  initArtifactWatcher: (spaceId: string) => Promise<IpcResponse>
+  onArtifactChanged: (callback: (data: {
+    type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
+    path: string
+    relativePath: string
+    spaceId: string
+    item?: unknown
+  }) => void) => () => void
   openArtifact: (filePath: string) => Promise<IpcResponse>
   showArtifactInFolder: (filePath: string) => Promise<IpcResponse>
   readArtifactContent: (filePath: string) => Promise<IpcResponse>
+  saveArtifactContent: (filePath: string, content: string) => Promise<IpcResponse>
+  detectFileType: (filePath: string) => Promise<IpcResponse<{
+    isText: boolean
+    canViewInCanvas: boolean
+    contentType: 'code' | 'markdown' | 'html' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'binary'
+    language?: string
+    mimeType: string
+  }>>
 
   // Onboarding
   writeOnboardingArtifact: (spaceId: string, filename: string, content: string) => Promise<IpcResponse>
@@ -137,8 +155,6 @@ export interface HaloAPI {
   // System Settings
   getAutoLaunch: () => Promise<IpcResponse>
   setAutoLaunch: (enabled: boolean) => Promise<IpcResponse>
-  getMinimizeToTray: () => Promise<IpcResponse>
-  setMinimizeToTray: (enabled: boolean) => Promise<IpcResponse>
 
   // Window
   setTitleBarOverlay: (options: { color: string; symbolColor: string }) => Promise<IpcResponse>
@@ -244,7 +260,11 @@ export interface HaloAPI {
   }) => void) => Promise<{ success: boolean; path?: string; error?: string }>
   openExternal: (url: string) => Promise<void>
 
-  // Bootstrap lifecycle events
+  // Bootstrap lifecycle
+  getBootstrapStatus: () => Promise<IpcResponse<{
+    extendedReady: boolean
+    extendedReadyAt: number
+  }>>
   onBootstrapExtendedReady: (callback: (data: { timestamp: number; duration: number }) => void) => () => void
 }
 
@@ -334,15 +354,21 @@ const api: HaloAPI = {
   onAgentComplete: (callback) => createEventListener('agent:complete', callback),
   onAgentThinking: (callback) => createEventListener('agent:thinking', callback),
   onAgentThought: (callback) => createEventListener('agent:thought', callback),
+  onAgentThoughtDelta: (callback) => createEventListener('agent:thought-delta', callback),
   onAgentMcpStatus: (callback) => createEventListener('agent:mcp-status', callback),
   onAgentCompact: (callback) => createEventListener('agent:compact', callback),
 
   // Artifact
   listArtifacts: (spaceId) => ipcRenderer.invoke('artifact:list', spaceId),
   listArtifactsTree: (spaceId) => ipcRenderer.invoke('artifact:list-tree', spaceId),
+  loadArtifactChildren: (spaceId, dirPath) => ipcRenderer.invoke('artifact:load-children', spaceId, dirPath),
+  initArtifactWatcher: (spaceId) => ipcRenderer.invoke('artifact:init-watcher', spaceId),
+  onArtifactChanged: (callback) => createEventListener('artifact:changed', callback as (data: unknown) => void),
   openArtifact: (filePath) => ipcRenderer.invoke('artifact:open', filePath),
   showArtifactInFolder: (filePath) => ipcRenderer.invoke('artifact:show-in-folder', filePath),
   readArtifactContent: (filePath) => ipcRenderer.invoke('artifact:read-content', filePath),
+  saveArtifactContent: (filePath, content) => ipcRenderer.invoke('artifact:save-content', filePath, content),
+  detectFileType: (filePath) => ipcRenderer.invoke('artifact:detect-file-type', filePath),
 
   // Onboarding
   writeOnboardingArtifact: (spaceId, filename, content) =>
@@ -364,8 +390,6 @@ const api: HaloAPI = {
   // System Settings
   getAutoLaunch: () => ipcRenderer.invoke('system:get-auto-launch'),
   setAutoLaunch: (enabled) => ipcRenderer.invoke('system:set-auto-launch', enabled),
-  getMinimizeToTray: () => ipcRenderer.invoke('system:get-minimize-to-tray'),
-  setMinimizeToTray: (enabled) => ipcRenderer.invoke('system:set-minimize-to-tray', enabled),
 
   // Window
   setTitleBarOverlay: (options) => ipcRenderer.invoke('window:set-title-bar-overlay', options),
@@ -453,7 +477,8 @@ const api: HaloAPI = {
   },
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
-  // Bootstrap lifecycle events
+  // Bootstrap lifecycle
+  getBootstrapStatus: () => ipcRenderer.invoke('bootstrap:get-status'),
   onBootstrapExtendedReady: (callback) => createEventListener('bootstrap:extended-ready', callback as (data: unknown) => void),
 }
 

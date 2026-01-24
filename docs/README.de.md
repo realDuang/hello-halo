@@ -4,11 +4,12 @@
 
 # Halo
 
-### Die Fehlende Benutzeroberfläche für Claude Code
+### Open Source Cowork for Everyone
 
-Claude Code in deiner Tasche — der Open-Source Desktop-Client, der die Leistung von Claude Code für alle zugänglich macht. Kein Terminal, niemals.
 
-**Unsere Philosophie:** Komplexe Technologie in intuitive menschliche Interaktion verpacken.
+Erlebe die volle Kraft eines AI Agents, ohne das Terminal zu berühren. Halo bietet allen eine visuelle, plattformübergreifende Desktop-Erfahrung—open source und kostenlos.
+
+> **Unsere Philosophie:** Komplexe Technologie in intuitive menschliche Interaktion verpacken.
 
 [![GitHub Stars](https://img.shields.io/github/stars/openkursar/hello-halo?style=social)](https://github.com/openkursar/hello-halo/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
@@ -125,7 +126,7 @@ Erweitere Fähigkeiten mit Model Context Protocol. Kompatibel mit Claude Desktop
 | Plattform | Download | Anforderungen |
 |----------|----------|--------------|
 | **macOS** (Apple Silicon) | [Download .dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 11+ |
-| **macOS** (Intel) | Kommt bald | macOS 11+ |
+| **macOS** (Intel) | [Download .dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 11+ |
 | **Windows** | [Download .exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+ |
 | **Linux** | [Download .AppImage](https://github.com/openkursar/hello-halo/releases/latest) | Ubuntu 20.04+ |
 | **Web** (PC/Mobil) | Aktiviere Fernzugriff in der Desktop-App | Jeder moderne Browser |
@@ -178,6 +179,8 @@ npm run dev
 - **Kein Backend Erforderlich** — Reiner Desktop-Client, nutze deine eigenen API-Schlüssel
 - **Echter Agent-Loop** — Tool-Ausführung, nicht nur Textgenerierung
 
+> **Powered by [Claude Code](https://github.com/anthropics/claude-code)** — Danke an Anthropic für den leistungsfähigsten KI-Agenten.
+
 ---
 
 ## Was Leute Bauen
@@ -190,19 +193,6 @@ Halo ist nicht nur für Entwickler. Wir haben gesehen:
 - **Entwickler** liefern Features schneller als je zuvor
 
 Die Hürde ist nicht mehr die KI-Fähigkeit. **Es ist die Zugänglichkeit.** Halo beseitigt diese Hürde.
-
----
-
-## Tech-Stack
-
-| Schicht | Technologie |
-|-------|------------|
-| Framework | Electron + electron-vite |
-| Frontend | React 18 + TypeScript |
-| Styling | Tailwind CSS + shadcn/ui Muster |
-| Zustand | Zustand |
-| Agent-Kern | @anthropic-ai/claude-code SDK |
-| Markdown | react-markdown + highlight.js |
 
 ---
 
@@ -263,7 +253,7 @@ Während langweiliger Meetings (wir kennen das alle) dachte ich: *Was wenn ich C
 
 Dann kam ein anderes Problem — meine nicht-technischen Kollegen wollten Claude Code ausprobieren, nachdem sie gesehen hatten, was es kann. Aber sie blieben bei der Installation hängen. *"Was ist npm? Wie installiere ich Node.js?"* Manche verbrachten Tage damit, es herauszufinden.
 
-Also baute ich Halo für mich:
+Also baute ich Halo für mich und meine Freunde:
 - **Visuelle Oberfläche** — kein Starren auf Terminal-Ausgaben mehr
 - **Ein-Klick-Installation** — kein Node.js, kein npm, einfach herunterladen und ausführen
 - **Fernzugriff** — steuern vom Handy, Tablet oder jedem Browser
@@ -273,6 +263,14 @@ Die erste Version dauerte ein paar Stunden. Alles danach? **100% von Halo selbst
 KI baut KI. Jetzt in jedermanns Händen.
 
 ---
+
+## Mitwirkende
+
+<a href="https://github.com/openkursar/hello-halo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=openkursar/hello-halo" />
+</a>
+
+Made with ❤️ by our contributors.
 
 <div align="center">
 

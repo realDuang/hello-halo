@@ -55,10 +55,13 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
     closeAllTabs,
     setOpen,
     saveScrollPosition,
+    updateTabContent,
+    markTabSaved,
     switchToNextTab,
     switchToPrevTab,
     switchToTabIndex,
     openUrl,
+    setEditMode,
   } = useCanvasLifecycle()
 
   // Keyboard shortcuts
@@ -124,6 +127,27 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
     }
   }, [activeTabId, saveScrollPosition])
 
+  // Handle content changes (from CodeViewer edit mode)
+  const handleContentChange = useCallback((content: string) => {
+    if (activeTabId) {
+      updateTabContent(activeTabId, content)
+    }
+  }, [activeTabId, updateTabContent])
+
+  // Handle save complete (from CodeViewer - clears dirty flag)
+  const handleSaveComplete = useCallback((content: string) => {
+    if (activeTabId) {
+      markTabSaved(activeTabId, content)
+    }
+  }, [activeTabId, markTabSaved])
+
+  // Handle edit mode request (from MarkdownViewer)
+  const handleEditRequest = useCallback(() => {
+    if (activeTabId) {
+      setEditMode(activeTabId, true)
+    }
+  }, [activeTabId, setEditMode])
+
   // Don't render if not open
   if (!isOpen) return null
 
@@ -138,6 +162,9 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
           <TabContent
             tab={activeTab}
             onScrollChange={handleScrollChange}
+            onContentChange={handleContentChange}
+            onSaveComplete={handleSaveComplete}
+            onEditRequest={handleEditRequest}
           />
         ) : (
           <EmptyState />
@@ -153,9 +180,12 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
 interface TabContentProps {
   tab: TabState
   onScrollChange?: (position: number) => void
+  onContentChange?: (content: string) => void
+  onSaveComplete?: (content: string) => void
+  onEditRequest?: () => void
 }
 
-function TabContent({ tab, onScrollChange }: TabContentProps) {
+function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEditRequest }: TabContentProps) {
   const { t } = useTranslation()
   // Browser and PDF tabs use BrowserView (handle their own loading state)
   if (tab.type === 'browser' || tab.type === 'pdf') {
@@ -195,10 +225,34 @@ function TabContent({ tab, onScrollChange }: TabContentProps) {
   // Render appropriate viewer based on content type
   switch (tab.type) {
     case 'code':
-      return <CodeViewer tab={tab} onScrollChange={onScrollChange} />
+      return (
+        <CodeViewer
+          tab={tab}
+          onScrollChange={onScrollChange}
+          onContentChange={onContentChange}
+          onSaveComplete={onSaveComplete}
+        />
+      )
 
     case 'markdown':
-      return <MarkdownViewer tab={tab} onScrollChange={onScrollChange} />
+      // Default to MarkdownViewer for preview, switch to CodeViewer when editing
+      if (tab.isEditMode) {
+        return (
+          <CodeViewer
+            tab={tab}
+            onScrollChange={onScrollChange}
+            onContentChange={onContentChange}
+            onSaveComplete={onSaveComplete}
+          />
+        )
+      }
+      return (
+        <MarkdownViewer
+          tab={tab}
+          onScrollChange={onScrollChange}
+          onEditRequest={onEditRequest}
+        />
+      )
 
     case 'image':
       return <ImageViewer tab={tab} />
@@ -207,13 +261,29 @@ function TabContent({ tab, onScrollChange }: TabContentProps) {
       return <HtmlViewer tab={tab} />
 
     case 'json':
-      return <JsonViewer tab={tab} onScrollChange={onScrollChange} />
+      // Use CodeViewer for JSON too - enables editing with syntax highlighting
+      return (
+        <CodeViewer
+          tab={tab}
+          onScrollChange={onScrollChange}
+          onContentChange={onContentChange}
+          onSaveComplete={onSaveComplete}
+        />
+      )
 
     case 'csv':
       return <CsvViewer tab={tab} onScrollChange={onScrollChange} />
 
     case 'text':
-      return <TextViewer tab={tab} onScrollChange={onScrollChange} />
+      // Use CodeViewer for text files too - enables editing even without syntax highlighting
+      return (
+        <CodeViewer
+          tab={tab}
+          onScrollChange={onScrollChange}
+          onContentChange={onContentChange}
+          onSaveComplete={onSaveComplete}
+        />
+      )
 
     case 'terminal':
       // Terminal view placeholder (future feature)

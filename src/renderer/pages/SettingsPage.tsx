@@ -120,7 +120,6 @@ export function SettingsPage() {
 
   // System settings state
   const [autoLaunch, setAutoLaunch] = useState(config?.system?.autoLaunch || false)
-  const [minimizeToTray, setMinimizeToTray] = useState(config?.system?.minimizeToTray || false)
 
   // API Key visibility state
   const [showApiKey, setShowApiKey] = useState(false)
@@ -188,15 +187,9 @@ export function SettingsPage() {
 
   const loadSystemSettings = async () => {
     try {
-      const [autoLaunchRes, minimizeRes] = await Promise.all([
-        api.getAutoLaunch(),
-        api.getMinimizeToTray()
-      ])
+      const autoLaunchRes = await api.getAutoLaunch()
       if (autoLaunchRes.success) {
         setAutoLaunch(autoLaunchRes.data as boolean)
-      }
-      if (minimizeRes.success) {
-        setMinimizeToTray(minimizeRes.data as boolean)
       }
     } catch (error) {
       console.error('[Settings] Failed to load system settings:', error)
@@ -309,17 +302,6 @@ export function SettingsPage() {
     } catch (error) {
       console.error('[Settings] Failed to set auto launch:', error)
       setAutoLaunch(!enabled) // Revert on error
-    }
-  }
-
-  // Handle minimize to tray change
-  const handleMinimizeToTrayChange = async (enabled: boolean) => {
-    setMinimizeToTray(enabled)
-    try {
-      await api.setMinimizeToTray(enabled)
-    } catch (error) {
-      console.error('[Settings] Failed to set minimize to tray:', error)
-      setMinimizeToTray(!enabled) // Revert on error
     }
   }
 
@@ -1079,44 +1061,6 @@ export function SettingsPage() {
                   </label>
                 </div>
 
-                {/* Minimize to Tray */}
-                <div className="flex items-center justify-between pt-4 border-t border-border">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium">{t('Background Daemon')}</p>
-                      <span
-                        className="inline-flex items-center justify-center w-4 h-4 text-xs rounded-full bg-muted text-muted-foreground cursor-help"
-                        title={t('Minimize to system tray when closing window, can be awakened anytime')}
-                      >
-                        ?
-                      </span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      {t('Minimize to {{trayType}} when closing window, instead of exiting the program', {
-                        trayType: window.platform?.isMac ? t('menu bar') : t('system tray')
-                      })}
-                    </p>
-                    <p className="text-xs text-muted-foreground/70 mt-1">
-                      {t('When enabled, you can remotely control anytime, click {{trayType}} icon to awaken', {
-                        trayType: window.platform?.isMac ? t('menu bar') : t('tray')
-                      })}
-                    </p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={minimizeToTray}
-                      onChange={(e) => handleMinimizeToTrayChange(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-                      <div
-                        className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${minimizeToTray ? 'translate-x-5' : 'translate-x-0.5'
-                          } mt-0.5`}
-                      />
-                    </div>
-                  </label>
-                </div>
               </div>
             </section>
           )}

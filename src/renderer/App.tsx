@@ -79,6 +79,7 @@ export default function App() {
     handleAgentError,
     handleAgentComplete,
     handleAgentThought,
+    handleAgentThoughtDelta,
     handleAgentCompact,
     currentSpaceId,
     setCurrentSpace: setChatCurrentSpace,
@@ -92,12 +93,16 @@ export default function App() {
   const { spaces, haloSpace, setCurrentSpace: setSpaceStoreCurrentSpace } = useSpaceStore()
 
   // Initialize app on mount - wait for backend extended services to be ready
+  // Uses Pull+Push pattern for reliable initialization:
+  // - Pull: Query status immediately (handles HMR, error recovery - 0ms delay)
+  // - Push: Listen for event (normal startup flow)
+  // - Timeout: Fallback protection if something goes wrong
   useEffect(() => {
     let initialized = false
     const startTime = Date.now()
-    console.log('[App] Mounted, waiting for bootstrap:extended-ready...')
+    console.log('[App] Mounted, initializing with Pull+Push pattern...')
 
-    const doInit = async (trigger: 'event' | 'timeout') => {
+    const doInit = async (trigger: 'query' | 'event' | 'timeout') => {
       if (initialized) return
       initialized = true
 
@@ -109,20 +114,34 @@ export default function App() {
       await initializeOnboarding()
     }
 
-    // Listen for extended services ready event from main process
+    // 1. Pull: Query current status immediately
+    // This handles HMR reload and error recovery scenarios where event was already sent
+    api.getBootstrapStatus().then(status => {
+      if (status.extendedReady) {
+        console.log('[App] Bootstrap status: already ready, initializing immediately')
+        doInit('query')
+      } else {
+        console.log('[App] Bootstrap status: not ready, waiting for event...')
+      }
+    }).catch(err => {
+      console.warn('[App] Failed to query bootstrap status:', err)
+    })
+
+    // 2. Push: Listen for extended services ready event from main process
+    // This is the normal startup flow for fresh app launch
     const unsubscribe = api.onBootstrapExtendedReady((data) => {
       console.log('[App] Received bootstrap:extended-ready', data)
       doInit('event')
     })
 
-    // Fallback timeout - if event not received in 5 seconds, initialize anyway
-    // This prevents the app from being stuck if something goes wrong
+    // 3. Timeout: Fallback protection if something goes wrong
+    // Reduced to 5s since we now have Pull mechanism as primary fast path
     const fallbackTimeout = setTimeout(() => {
       if (!initialized) {
-        console.warn('[App] Bootstrap timeout after 10000ms, force initializing...')
+        console.warn('[App] Bootstrap timeout after 5000ms, force initializing...')
         doInit('timeout')
       }
-    }, 10000)
+    }, 5000)
 
     return () => {
       unsubscribe()
@@ -171,6 +190,20 @@ export default function App() {
       handleAgentThought(data as AgentEventBase & { thought: Thought })
     })
 
+    // Thought delta listener - handles incremental updates to streaming thoughts
+    const unsubThoughtDelta = api.onAgentThoughtDelta((data) => {
+      // Don't log every delta to reduce noise
+      handleAgentThoughtDelta(data as AgentEventBase & {
+        thoughtId: string
+        delta?: string
+        content?: string
+        toolInput?: Record<string, unknown>
+        isComplete?: boolean
+        isReady?: boolean
+        isToolInput?: boolean
+      })
+    })
+
     // Message events (with session IDs)
     const unsubMessage = api.onAgentMessage((data) => {
       console.log('[App] Received agent:message event:', data)
@@ -213,6 +246,7 @@ export default function App() {
 
     return () => {
       unsubThought()
+      unsubThoughtDelta()
       unsubMessage()
       unsubToolCall()
       unsubToolResult()
@@ -228,6 +262,7 @@ export default function App() {
     handleAgentError,
     handleAgentComplete,
     handleAgentThought,
+    handleAgentThoughtDelta,
     handleAgentCompact,
     setMcpStatus
   ])

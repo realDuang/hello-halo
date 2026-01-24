@@ -8,93 +8,28 @@
 
 import { useState, useRef, useEffect, useMemo, memo } from 'react'
 import {
-  Lightbulb,
-  Braces,
   CheckCircle2,
-  MessageSquare,
-  Info,
   XCircle,
-  Check,
-  Zap,
   ChevronDown,
+  ChevronUp,
   Loader2,
+  Braces,
 } from 'lucide-react'
-import { getToolIcon } from '../icons/ToolIcons'
 import { TodoCard, parseTodoInput } from '../tool/TodoCard'
+import { ToolResultViewer } from './tool-result'
+import {
+  truncateText,
+  getThoughtIcon,
+  getThoughtColor,
+  getThoughtLabelKey,
+  getToolFriendlyFormat,
+} from './thought-utils'
 import type { Thought } from '../../types'
 import { useTranslation } from '../../i18n'
 
 interface ThoughtProcessProps {
   thoughts: Thought[]
   isThinking: boolean
-}
-
-// Get icon component for thought type
-function getThoughtIcon(type: Thought['type'], toolName?: string) {
-  switch (type) {
-    case 'thinking':
-      return Lightbulb
-    case 'tool_use':
-      return toolName ? getToolIcon(toolName) : Braces
-    case 'tool_result':
-      return CheckCircle2
-    case 'text':
-      return MessageSquare
-    case 'system':
-      return Info
-    case 'error':
-      return XCircle
-    case 'result':
-      return Check
-    default:
-      return Zap
-  }
-}
-
-// Get color class for thought type
-function getThoughtColor(type: Thought['type'], isError?: boolean): string {
-  if (isError) return 'text-destructive'
-
-  switch (type) {
-    case 'thinking':
-      return 'text-blue-400'
-    case 'tool_use':
-      return 'text-amber-400'
-    case 'tool_result':
-      return 'text-green-400'
-    case 'text':
-      return 'text-foreground'
-    case 'system':
-      return 'text-muted-foreground'
-    case 'error':
-      return 'text-destructive'
-    case 'result':
-      return 'text-primary'
-    default:
-      return 'text-muted-foreground'
-  }
-}
-
-// Get label for thought type - returns translation key
-function getThoughtLabelKey(type: Thought['type']): string {
-  switch (type) {
-    case 'thinking':
-      return 'Thinking'
-    case 'tool_use':
-      return 'Tool call'
-    case 'tool_result':
-      return 'Tool result'
-    case 'text':
-      return 'AI'
-    case 'system':
-      return 'System'
-    case 'error':
-      return 'Error'
-    case 'result':
-      return 'Complete'
-    default:
-      return 'AI'
-  }
 }
 
 // Get human-friendly action summary for collapsed header (isThinking=true only)
@@ -105,6 +40,10 @@ function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Reco
   for (let i = thoughts.length - 1; i >= 0; i--) {
     const t = thoughts[i]
     if (t.type === 'tool_use' && t.toolName) {
+      // If tool is still streaming (not ready), show generating
+      if (t.isStreaming || !t.isReady) {
+        return { key: 'Generating {{tool}}...', params: { tool: t.toolName } }
+      }
       const input = t.toolInput
       switch (t.toolName) {
         case 'Read': return { key: 'Reading {{file}}...', params: { file: extractFileName(input?.file_path) } }
@@ -162,11 +101,6 @@ function extractUrl(url: unknown): string {
   }
 }
 
-// Truncate text with ellipsis if too long
-function truncateText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text
-  return text.substring(0, maxLength - 1) + '…'
-}
 
 // Timer display component to isolate re-renders
 function TimerDisplay({ startTime, isThinking }: { startTime: number | null; isThinking: boolean }) {
@@ -203,30 +137,76 @@ function TimerDisplay({ startTime, isThinking }: { startTime: number | null; isT
 
 // Individual thought item (for non-special tools)
 const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Thought; isLast: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [showRawJson, setShowRawJson] = useState(false)
+  const [showResult, setShowResult] = useState(true)  // Tool result collapsed by default shows summary
+  const [isContentExpanded, setIsContentExpanded] = useState(false)  // For thinking content expand
   const { t } = useTranslation()
   const color = getThoughtColor(thought.type, thought.isError)
   const Icon = getThoughtIcon(thought.type, thought.toolName)
 
-  // Truncate content for display
-  const maxPreviewLength = 150
-  const content = thought.type === 'tool_use'
-    ? `${thought.toolName}: ${JSON.stringify(thought.toolInput || {}).substring(0, 100)}`
-    : thought.type === 'tool_result'
-      ? (thought.toolOutput || '').substring(0, 200)
-      : thought.content
+  // Determine content and display mode based on thought type and streaming state
+  const isStreaming = thought.isStreaming ?? false
+  const isToolReady = thought.isReady ?? true  // Default true for backward compatibility
+  const hasToolResult = thought.type === 'tool_use' && thought.toolResult
 
-  const needsTruncate = content.length > maxPreviewLength
-  const displayContent = isExpanded ? content : content.substring(0, maxPreviewLength)
+  // For tool_use: show friendly format when ready, "Generating..." when streaming
+  // For thinking: show content directly with streaming placeholder
+  let displayContent = ''
+  let needsTruncate = false
+  const maxPreviewLength = 150
+
+  if (thought.type === 'tool_use') {
+    if (!isToolReady) {
+      // Tool still streaming - show generating message
+      displayContent = t('Generating...')
+    } else {
+      // Tool ready - show friendly format
+      displayContent = getToolFriendlyFormat(thought.toolName || '', thought.toolInput)
+    }
+    needsTruncate = displayContent.length > maxPreviewLength
+  } else if (thought.type === 'thinking') {
+    // Thinking content - show with placeholder if empty
+    displayContent = thought.content || (isStreaming ? '...' : '')
+    needsTruncate = displayContent.length > maxPreviewLength
+  } else if (thought.type === 'tool_result') {
+    displayContent = (thought.toolOutput || '').substring(0, 200)
+    needsTruncate = displayContent.length > maxPreviewLength
+  } else {
+    displayContent = thought.content || ''
+    needsTruncate = displayContent.length > maxPreviewLength
+  }
+
+  // Always truncate content - use JSON button to see full content
+  const truncatedContent = needsTruncate ? displayContent.substring(0, maxPreviewLength) : displayContent
+
+  // Status indicator for tool_use - now includes execution status
+  const getToolStatus = () => {
+    if (thought.type !== 'tool_use') return null
+    if (!isToolReady) return { label: t('Generating'), color: 'text-amber-400', icon: 'loading' }
+    if (hasToolResult) {
+      return thought.toolResult!.isError
+        ? { label: t('Failed'), color: 'text-destructive', icon: 'error' }
+        : { label: t('Done'), color: 'text-green-400', icon: 'success' }
+    }
+    return { label: t('Running'), color: 'text-blue-400', icon: 'running' }
+  }
+  const toolStatus = getToolStatus()
+
 
   return (
     <div className="flex gap-3 group animate-fade-in">
       {/* Timeline line */}
       <div className="flex flex-col items-center">
         <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
-          thought.isError ? 'bg-destructive/20' : 'bg-primary/10'
-        } ${color}`}>
-          <Icon size={14} />
+          thought.isError || thought.toolResult?.isError ? 'bg-destructive/20' : isStreaming ? 'bg-primary/20' : 'bg-primary/10'
+        } ${thought.toolResult?.isError ? 'text-destructive' : color}`}>
+          {isStreaming && thought.type === 'thinking' ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : hasToolResult ? (
+            thought.toolResult!.isError ? <XCircle size={14} /> : <CheckCircle2 size={14} />
+          ) : (
+            <Icon size={14} />
+          )}
         </div>
         {!isLast && (
           <div className="w-0.5 flex-1 bg-border/30 mt-1" />
@@ -237,51 +217,105 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
       <div className="flex-1 pb-4 min-w-0">
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
-          <span className={`text-xs font-medium ${color}`}>
+          <span className={`text-xs font-medium ${thought.toolResult?.isError ? 'text-destructive' : color}`}>
             {t(getThoughtLabelKey(thought.type))}
             {thought.toolName && ` - ${thought.toolName}`}
           </span>
-          <span className="text-xs text-muted-foreground/50">
+          {toolStatus && (
+            <span className={`text-xs ${toolStatus.color}`}>
+              {toolStatus.label}
+            </span>
+          )}
+          {/* Time - hidden on mobile */}
+          <span className="hidden sm:inline text-xs text-muted-foreground/50">
             {new Date(thought.timestamp).toLocaleTimeString('zh-CN', {
               hour: '2-digit',
               minute: '2-digit',
               second: '2-digit'
             })}
           </span>
+          {/* Duration - hidden on mobile */}
           {thought.duration && (
-            <span className="text-xs text-muted-foreground/40">
+            <span className="hidden sm:inline text-xs text-muted-foreground/40">
               ({(thought.duration / 1000).toFixed(1)}s)
             </span>
           )}
         </div>
 
-        {/* Content */}
-        {content && (
-          <div
-            className={`text-sm ${
-              thought.type === 'thinking' ? 'text-muted-foreground/70 italic' : 'text-foreground/80'
-            } whitespace-pre-wrap break-words`}
-          >
-            {displayContent}
-            {needsTruncate && !isExpanded && '...'}
+        {/* Content area with actions on the right */}
+        <div className="flex items-end gap-3">
+          {/* Content - takes available space */}
+          <div className="flex-1 min-w-0">
+            {displayContent && (
+              <div
+                className={`text-sm ${
+                  thought.type === 'thinking' ? 'text-muted-foreground/70 italic' : 'text-foreground/80'
+                } whitespace-pre-wrap break-words`}
+              >
+                {isContentExpanded || !needsTruncate ? displayContent : truncatedContent + '...'}
+                {thought.type === 'thinking' && needsTruncate && (
+                  <button
+                    onClick={() => setIsContentExpanded(!isContentExpanded)}
+                    className="ml-1 text-primary/60 hover:text-primary not-italic"
+                  >
+                    {isContentExpanded ? t('Collapse') : t('Expand')}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-        )}
 
-        {/* Expand button */}
-        {needsTruncate && (
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="text-xs text-primary/60 hover:text-primary mt-1 transition-colors"
-          >
-            {isExpanded ? t('Collapse') : t('Expand')}
-          </button>
-        )}
+          {/* Actions - right aligned, compact buttons */}
+          {((thought.type === 'tool_use' && isToolReady && thought.toolInput && Object.keys(thought.toolInput).length > 0) || hasToolResult) && (
+            <div className="flex items-center gap-0.5 shrink-0 text-[9px]">
+              {/* Raw JSON button */}
+              {thought.type === 'tool_use' && isToolReady && thought.toolInput && Object.keys(thought.toolInput).length > 0 && (
+                <button
+                  onClick={() => setShowRawJson(!showRawJson)}
+                  className={`
+                    flex items-center gap-0.5 px-1 py-px rounded transition-colors
+                    ${showRawJson
+                      ? 'bg-primary/20 text-primary'
+                      : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
+                    }
+                  `}
+                  title={showRawJson ? t('Hide raw JSON') : t('Show raw JSON')}
+                >
+                  <Braces size={10} />
+                  JSON
+                </button>
+              )}
 
-        {/* Tool input details (expandable) */}
-        {thought.type === 'tool_use' && thought.toolInput && isExpanded && (
+              {/* Show/Hide result button */}
+              {hasToolResult && thought.toolResult!.output && (
+                <button
+                  onClick={() => setShowResult(!showResult)}
+                  className="flex items-center gap-0.5 px-1 py-px rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+                  title={showResult ? t('Hide tool result') : t('Show tool result')}
+                >
+                  {showResult ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                  {showResult ? 'Hide' : 'Result'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Raw JSON display (for tool_use) */}
+        {thought.type === 'tool_use' && showRawJson && thought.toolInput && (
           <pre className="mt-2 p-2 rounded bg-muted/30 text-xs text-muted-foreground overflow-x-auto">
             {JSON.stringify(thought.toolInput, null, 2)}
           </pre>
+        )}
+
+        {/* Tool result display (merged under tool_use) - Smart rendering */}
+        {hasToolResult && showResult && thought.toolResult!.output && (
+          <ToolResultViewer
+            toolName={thought.toolName || ''}
+            toolInput={thought.toolInput}
+            output={thought.toolResult!.output}
+            isError={thought.toolResult!.isError}
+          />
         )}
       </div>
     </div>
@@ -289,10 +323,28 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
 })
 
 export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
-  // Default collapsed - like ChatGPT, less intrusive
+  // Start collapsed, but auto-expand when streaming starts
   const [isExpanded, setIsExpanded] = useState(false)
+  const [hasAutoExpanded, setHasAutoExpanded] = useState(false)
+  const [isMaximized, setIsMaximized] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
   const { t } = useTranslation()
+
+  // Auto-expand when isThinking becomes true (streaming started)
+  // Only do this once per session to avoid annoying user who manually collapsed
+  useEffect(() => {
+    if (isThinking && !hasAutoExpanded && thoughts.length > 0) {
+      setIsExpanded(true)
+      setHasAutoExpanded(true)
+    }
+  }, [isThinking, hasAutoExpanded, thoughts.length])
+
+  // Reset auto-expand flag when thoughts are cleared (new session)
+  useEffect(() => {
+    if (thoughts.length === 0) {
+      setHasAutoExpanded(false)
+    }
+  }, [thoughts.length])
 
   // Calculate elapsed time from first thought's timestamp
   // This is more reliable than tracking component mount time
@@ -315,11 +367,13 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
     return parseTodoInput(latest.toolInput!)
   }, [thoughts])
 
-  // Filter thoughts for display (exclude TodoWrite and its results)
+  // Filter thoughts for display (exclude TodoWrite, tool_result, and result)
+  // tool_result is now merged into tool_use, no need to show separately
   const displayThoughts = useMemo(() => {
     return thoughts.filter(t => {
       if (t.type === 'result') return false
-      // Exclude TodoWrite tool_use and tool_result (shown separately at bottom)
+      if (t.type === 'tool_result') return false  // Merged into tool_use
+      // Exclude TodoWrite tool_use (shown separately at bottom)
       if (t.toolName === 'TodoWrite') return false
       return true
     })
@@ -399,12 +453,12 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
 
         {/* Content */}
         {isExpanded && (
-          <div className="border-t border-border/30">
+          <div className="border-t border-border/30 thought-content">
             {/* Scrollable thought items */}
             {hasDisplayContent && (
               <div
                 ref={contentRef}
-                className="px-4 pt-3 max-h-[300px] overflow-y-auto"
+                className={`px-4 pt-3 ${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} scrollbar-overlay transition-all duration-200`}
               >
                 {displayThoughts.map((thought, index) => (
                   <ThoughtItem
@@ -420,6 +474,20 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
             {latestTodos && latestTodos.length > 0 && (
               <div className={`px-4 ${hasDisplayContent ? 'pt-2' : 'pt-3'} pb-3`}>
                 <TodoCard todos={latestTodos} />
+              </div>
+            )}
+
+            {/* Maximize toggle - bottom right, heuristic: show when likely to overflow */}
+            {(displayThoughts.length > 8 || isMaximized) && (
+              <div className="flex justify-end px-4 pb-2">
+                <button
+                  onClick={() => setIsMaximized(!isMaximized)}
+                  className="flex items-center gap-0.5 px-1 py-px rounded text-xs text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+                  title={isMaximized ? t('Compact view') : t('Full view')}
+                >
+                  {isMaximized ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                  {isMaximized ? 'Compact' : 'Full'}
+                </button>
               </div>
             )}
           </div>

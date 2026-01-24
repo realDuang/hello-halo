@@ -8,16 +8,20 @@
 import { useState, useMemo } from 'react'
 import {
   Lightbulb,
-  Wrench,
-  CheckCircle2,
   XCircle,
-  Info,
-  Sparkles,
-  FileText,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  Braces,
 } from 'lucide-react'
-import { getToolIcon } from '../icons/ToolIcons'
 import { TodoCard, parseTodoInput } from '../tool/TodoCard'
+import { ToolResultViewer } from './tool-result'
+import {
+  getThoughtIcon,
+  getThoughtColor,
+  getThoughtLabelKey,
+  getToolFriendlyFormat,
+} from './thought-utils'
 import type { Thought } from '../../types'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
 
@@ -25,72 +29,22 @@ interface CollapsedThoughtProcessProps {
   thoughts: Thought[]
 }
 
-// Get icon for thought type
-function getThoughtIcon(type: Thought['type'], toolName?: string) {
-  switch (type) {
-    case 'thinking':
-      return Lightbulb
-    case 'tool_use':
-      return toolName ? getToolIcon(toolName) : Wrench
-    case 'tool_result':
-      return CheckCircle2
-    case 'system':
-      return Info
-    case 'error':
-      return XCircle
-    case 'result':
-      return Sparkles
-    default:
-      return FileText
-  }
-}
-
-// Get color class for thought type
-function getThoughtColor(type: Thought['type'], isError?: boolean): string {
-  if (isError) return 'text-destructive'
-  switch (type) {
-    case 'thinking':
-      return 'text-blue-400'
-    case 'tool_use':
-      return 'text-amber-400'
-    case 'tool_result':
-      return 'text-green-400'
-    case 'error':
-      return 'text-destructive'
-    default:
-      return 'text-muted-foreground'
-  }
-}
-
-// Get label for thought type
-function getThoughtLabel(type: Thought['type'], t: (key: string) => string): string {
-  switch (type) {
-    case 'thinking':
-      return t('Thinking')
-    case 'tool_use':
-      return t('Tool call')
-    case 'tool_result':
-      return t('Tool result')
-    case 'system':
-      return t('System')
-    case 'error':
-      return t('Error')
-    case 'result':
-      return t('Completed')
-    default:
-      return t('Event')
-  }
-}
 
 // Single thought item in expanded view
 function ThoughtItem({ thought }: { thought: Thought }) {
   const { t } = useTranslation()
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [showRawJson, setShowRawJson] = useState(false)
+  const [showResult, setShowResult] = useState(true)  // Default show result
+  const [isContentExpanded, setIsContentExpanded] = useState(false)  // For thinking content expand
   const color = getThoughtColor(thought.type, thought.isError)
   const Icon = getThoughtIcon(thought.type, thought.toolName)
 
+  // Check if tool has result (merged tool_result)
+  const hasToolResult = thought.type === 'tool_use' && thought.toolResult
+
+  // Use friendly format for tool_use, raw content for others
   const content = thought.type === 'tool_use'
-    ? `${thought.toolName}: ${JSON.stringify(thought.toolInput || {}).substring(0, 100)}`
+    ? getToolFriendlyFormat(thought.toolName || '', thought.toolInput)
     : thought.type === 'tool_result'
       ? (thought.toolOutput || '').substring(0, 200)
       : thought.content
@@ -99,34 +53,97 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   const needsTruncate = content.length > maxLen
 
   return (
-    <div className="flex gap-2 py-1.5 text-xs border-b border-border/20 last:border-b-0">
-      <Icon size={14} className={color} />
-      <div className="flex-1 min-w-0">
-        <span className={`font-medium ${color}`}>
-          {getThoughtLabel(thought.type, t)}
+    <div className="py-1.5 text-xs border-b border-border/20 last:border-b-0">
+      {/* First row: Icon + Tool name + Timestamp */}
+      <div className="flex items-center gap-2">
+        <Icon size={14} className={`${color} shrink-0`} />
+        <span className={`font-medium ${color} flex-1 min-w-0 truncate`}>
+          {t(getThoughtLabelKey(thought.type))}
           {thought.toolName && ` - ${thought.toolName}`}
         </span>
-        {content && (
-          <div className="mt-0.5 text-muted-foreground/70 whitespace-pre-wrap break-words">
-            {isExpanded || !needsTruncate ? content : content.substring(0, maxLen) + '...'}
-            {needsTruncate && (
+        <span className="text-muted-foreground/40 text-[10px] shrink-0">
+          {new Intl.DateTimeFormat(getCurrentLanguage(), {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          }).format(new Date(thought.timestamp))}
+        </span>
+      </div>
+
+      {/* Content area with actions on the right */}
+      <div className="flex items-end gap-3 mt-0.5 ml-[22px]">
+        {/* Content - takes available space */}
+        <div className="flex-1 min-w-0">
+          {content && (
+            <div className="text-muted-foreground/70 whitespace-pre-wrap break-words">
+              {isContentExpanded || !needsTruncate ? content : content.substring(0, maxLen) + '...'}
+              {thought.type === 'thinking' && needsTruncate && (
+                <button
+                  onClick={() => setIsContentExpanded(!isContentExpanded)}
+                  className="ml-1 text-primary/60 hover:text-primary"
+                >
+                  {isContentExpanded ? t('Collapse') : t('Expand')}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Actions - right aligned, compact buttons */}
+        {((thought.type === 'tool_use' && thought.toolInput && Object.keys(thought.toolInput).length > 0) || hasToolResult) && (
+          <div className="flex items-center gap-0.5 shrink-0 text-[10px]">
+            {/* Raw JSON button */}
+            {thought.type === 'tool_use' && thought.toolInput && Object.keys(thought.toolInput).length > 0 && (
               <button
-                onClick={() => setIsExpanded(!isExpanded)}
-                className="ml-1 text-primary/60 hover:text-primary"
+                onClick={() => setShowRawJson(!showRawJson)}
+                className={`
+                  flex items-center gap-0.5 px-1 py-px rounded transition-colors
+                  ${showRawJson
+                    ? 'bg-primary/20 text-primary'
+                    : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
+                  }
+                `}
+                title={showRawJson ? t('Hide raw JSON') : t('Show raw JSON')}
               >
-                {isExpanded ? t('Collapse') : t('Expand')}
+                <Braces size={10} />
+                {/* No need to display text, simplify visuals. */}
+                {/* JSON */}
+              </button>
+            )}
+
+            {/* Show/Hide result button */}
+            {hasToolResult && thought.toolResult!.output && (
+              <button
+                onClick={() => setShowResult(!showResult)}
+                className="flex items-center gap-0.5 px-1 py-px rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+                title={showResult ? t('Hide tool result') : t('Show tool result')}
+              >
+                {showResult ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                {showResult ? 'Hide' : 'Result'}
               </button>
             )}
           </div>
         )}
       </div>
-      <span className="text-muted-foreground/40 text-[10px] shrink-0">
-        {new Intl.DateTimeFormat(getCurrentLanguage(), {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
-        }).format(new Date(thought.timestamp))}
-      </span>
+
+      {/* Raw JSON display (for tool_use) */}
+      {thought.type === 'tool_use' && showRawJson && thought.toolInput && (
+        <pre className="mt-2 ml-[22px] p-2 rounded bg-muted/30 text-[10px] text-muted-foreground overflow-x-auto">
+          {JSON.stringify(thought.toolInput, null, 2)}
+        </pre>
+      )}
+
+      {/* Tool result - shown/hidden based on toggle */}
+      {hasToolResult && thought.toolResult!.output && showResult && (
+        <div className="mt-1.5 ml-[22px]">
+          <ToolResultViewer
+            toolName={thought.toolName || ''}
+            toolInput={thought.toolInput}
+            output={thought.toolResult!.output}
+            isError={thought.toolResult!.isError}
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -134,6 +151,7 @@ function ThoughtItem({ thought }: { thought: Thought }) {
 export function CollapsedThoughtProcess({ thoughts }: CollapsedThoughtProcessProps) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(true)
+  const [isMaximized, setIsMaximized] = useState(false)
 
   // Get latest todo data (only render one TodoCard at bottom)
   const latestTodos = useMemo(() => {
@@ -207,10 +225,10 @@ export function CollapsedThoughtProcess({ thoughts }: CollapsedThoughtProcessPro
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="mt-1 px-3 py-2 bg-muted/20 rounded-lg border border-border/30 animate-slide-down">
+        <div className="mt-1 py-2 bg-muted/20 rounded-lg border border-border/30 animate-slide-down thought-content">
           {/* Thought items */}
           {displayThoughts.length > 0 && (
-            <div className="max-h-[300px] overflow-y-auto">
+            <div className={`${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} scrollbar-overlay px-3 transition-all duration-200`}>
               {displayThoughts.map((thought) => (
                 <ThoughtItem key={thought.id} thought={thought} />
               ))}
@@ -219,8 +237,22 @@ export function CollapsedThoughtProcess({ thoughts }: CollapsedThoughtProcessPro
 
           {/* TodoCard at bottom - only one instance */}
           {latestTodos && latestTodos.length > 0 && (
-            <div className={displayThoughts.length > 0 ? 'mt-2 pt-2 border-t border-border/20' : ''}>
+            <div className={`px-3 ${displayThoughts.length > 0 ? 'mt-2 pt-2 border-t border-border/20' : ''}`}>
               <TodoCard todos={latestTodos} />
+            </div>
+          )}
+
+          {/* Maximize toggle - bottom right, heuristic: show when likely to overflow */}
+          {(displayThoughts.length > 8 || isMaximized) && (
+            <div className="flex justify-end px-3 mt-1">
+              <button
+                onClick={() => setIsMaximized(!isMaximized)}
+                className="flex items-center gap-0.5 px-1 py-px rounded text-xs text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+                title={isMaximized ? t('Compact view') : t('Full view')}
+              >
+                {isMaximized ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                {isMaximized ? 'Compact' : 'Full'}
+              </button>
             </div>
           )}
         </div>

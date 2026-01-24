@@ -129,6 +129,17 @@ interface ChatState {
   handleAgentError: (data: AgentEventBase & { error: string }) => void
   handleAgentComplete: (data: AgentEventBase) => void
   handleAgentThought: (data: AgentEventBase & { thought: Thought }) => void
+  handleAgentThoughtDelta: (data: AgentEventBase & {
+    thoughtId: string
+    delta?: string
+    content?: string
+    toolInput?: Record<string, unknown>
+    isComplete?: boolean
+    isReady?: boolean
+    isToolInput?: boolean
+    toolResult?: { output: string; isError: boolean; timestamp: string }
+    isToolResult?: boolean
+  }) => void
   handleAgentCompact: (data: AgentEventBase & { trigger: 'manual' | 'auto'; preTokens: number }) => void
 
   // Cleanup
@@ -879,6 +890,65 @@ export const useChatStore = create<ChatState>((set, get) => ({
         thoughts: [...session.thoughts, thought],
         isThinking: true,
         isGenerating: true // Ensure generating state is set
+      })
+      return { sessions: newSessions }
+    })
+  },
+
+  // Handle thought delta - incremental update to a streaming thought
+  handleAgentThoughtDelta: (data) => {
+    const { conversationId, thoughtId, delta, content, toolInput, isComplete, isReady, isToolInput, toolResult, isToolResult } = data
+    // Don't log every delta to reduce console noise (only log on complete or toolResult)
+    if (isComplete || isToolResult) {
+      console.log(`[ChatStore] handleAgentThoughtDelta [${conversationId}]: thought ${thoughtId} ${isToolResult ? 'toolResult merged' : 'complete'}`)
+    }
+
+    set((state) => {
+      const newSessions = new Map(state.sessions)
+      const session = newSessions.get(conversationId)
+      if (!session) return state
+
+      // Find the thought to update
+      const thoughtIndex = session.thoughts.findIndex(t => t.id === thoughtId)
+      if (thoughtIndex === -1) {
+        console.warn(`[ChatStore] Thought not found for delta: ${thoughtId}`)
+        return state
+      }
+
+      // Create updated thoughts array
+      const newThoughts = [...session.thoughts]
+      const thought = { ...newThoughts[thoughtIndex] }
+
+      // Apply delta or content update
+      if (isToolResult && toolResult) {
+        // Tool result merge - add result to tool_use thought
+        thought.toolResult = toolResult
+      } else if (isToolInput) {
+        // For tool input, we just track streaming state, don't update content
+        // Content will be set on completion with toolInput
+        if (isComplete && toolInput) {
+          thought.toolInput = toolInput
+          thought.isStreaming = false
+          thought.isReady = isReady ?? true
+        }
+      } else {
+        // For thinking/text content
+        if (delta) {
+          thought.content = (thought.content || '') + delta
+        } else if (content !== undefined) {
+          thought.content = content
+        }
+
+        if (isComplete) {
+          thought.isStreaming = false
+        }
+      }
+
+      newThoughts[thoughtIndex] = thought
+
+      newSessions.set(conversationId, {
+        ...session,
+        thoughts: newThoughts
       })
       return { sessions: newSessions }
     })

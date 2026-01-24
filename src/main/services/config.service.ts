@@ -58,7 +58,6 @@ interface HaloConfig {
   }
   system: {
     autoLaunch: boolean
-    minimizeToTray: boolean
   }
   remoteAccess: {
     enabled: boolean
@@ -167,8 +166,7 @@ const DEFAULT_CONFIG: HaloConfig = {
     theme: 'dark'
   },
   system: {
-    autoLaunch: false,
-    minimizeToTray: false
+    autoLaunch: false
   },
   remoteAccess: {
     enabled: false,
@@ -484,7 +482,7 @@ export function setAutoLaunch(enabled: boolean): void {
   })
 
   // Save to config
-  saveConfig({ system: { autoLaunch: enabled, minimizeToTray: getConfig().system.minimizeToTray } })
+  saveConfig({ system: { autoLaunch: enabled } })
   console.log(`[Config] Auto launch set to: ${enabled}`)
 }
 
@@ -494,19 +492,4 @@ export function setAutoLaunch(enabled: boolean): void {
 export function getAutoLaunch(): boolean {
   const settings = app.getLoginItemSettings()
   return settings.openAtLogin
-}
-
-/**
- * Set minimize to tray behavior
- */
-export function setMinimizeToTray(enabled: boolean): void {
-  saveConfig({ system: { autoLaunch: getConfig().system.autoLaunch, minimizeToTray: enabled } })
-  console.log(`[Config] Minimize to tray set to: ${enabled}`)
-}
-
-/**
- * Get minimize to tray setting
- */
-export function getMinimizeToTray(): boolean {
-  return getConfig().system.minimizeToTray
 }

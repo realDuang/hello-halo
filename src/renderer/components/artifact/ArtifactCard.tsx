@@ -11,25 +11,10 @@ import type { Artifact } from '../../types'
 import { FileIcon } from '../icons/ToolIcons'
 import { ExternalLink, Download, Eye } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { canOpenInCanvas } from '../../constants/file-types'
 
 // Check if running in web mode
 const isWebMode = api.isRemoteMode()
-
-// File types that can be viewed in the Content Canvas
-const CANVAS_VIEWABLE_EXTENSIONS = new Set([
-  // Code
-  'js', 'jsx', 'ts', 'tsx', 'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp',
-  'cs', 'swift', 'kt', 'php', 'sh', 'bash', 'zsh', 'sql', 'yaml', 'yml', 'xml',
-  'vue', 'svelte', 'css', 'scss', 'less',
-  // Documents
-  'md', 'markdown', 'txt', 'log', 'env', 'pdf',
-  // Data
-  'json', 'csv',
-  // Web
-  'html', 'htm',
-  // Images
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp',
-])
 
 interface ArtifactCardProps {
   artifact: Artifact
@@ -50,8 +35,7 @@ export function ArtifactCard({ artifact }: ArtifactCardProps) {
   const isFolder = artifact.type === 'folder'
 
   // Check if this file can be viewed in the canvas
-  const canViewInCanvas = !isFolder && artifact.extension &&
-    CANVAS_VIEWABLE_EXTENSIONS.has(artifact.extension.toLowerCase())
+  const canViewInCanvas = !isFolder && canOpenInCanvas(artifact.extension)
 
   // Handle click to open file
   // Priority: Canvas > System App (desktop) > Download (web)

@@ -4,11 +4,12 @@
 
 # Halo
 
-### Claude Code 的图形界面
+### Open Source Cowork for Everyone
 
-把 Claude Code 装进口袋 — 开源桌面客户端，让每个人都能轻松使用 Claude Code 的强大能力。告别终端。
 
-**我们的理念：** 将复杂技术封装成符合直觉的人类交互。
+无需接触终端，即可体验 AI Agent 的全部能力。Halo 为所有人带来可视化、跨平台的桌面体验 — 开源且免费。
+
+> **我们的理念：** 将复杂技术封装成符合直觉的人类交互。
 
 [![GitHub Stars](https://img.shields.io/github/stars/openkursar/hello-halo?style=social)](https://github.com/openkursar/hello-halo/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
@@ -178,6 +179,8 @@ npm run dev
 - **无需后端** — 纯桌面客户端，使用你自己的 API 密钥
 - **真正的 Agent 循环** — 工具执行，而不只是文本生成
 
+> **由 [Claude Code](https://github.com/anthropics/claude-code) 驱动** — 感谢 Anthropic 构建了最强大的 AI Agent。
+
 ---
 
 ## 用户在用 Halo 做什么
@@ -190,19 +193,6 @@ Halo 不只是给开发者用的。我们看到：
 - **开发者** 以前所未有的速度交付功能
 
 障碍不再是 AI 的能力，**而是可及性**。Halo 消除了这个障碍。
-
----
-
-## 技术栈
-
-| 层 | 技术 |
-|-------|------------|
-| 框架 | Electron + electron-vite |
-| 前端 | React 18 + TypeScript |
-| 样式 | Tailwind CSS + shadcn/ui 风格 |
-| 状态管理 | Zustand |
-| Agent 核心 | @anthropic-ai/claude-code SDK |
-| Markdown | react-markdown + highlight.js |
 
 ---
 
@@ -275,7 +265,7 @@ MIT 许可证 — 详见 [LICENSE](../LICENSE)。
 
 然后又遇到另一个问题 — 我的非技术同事看到 Claude Code 能做什么后也想试试。但他们卡在了安装环节。*"什么是 npm？怎么安装 Node.js？"* 有些人花了好几天也没搞定。
 
-所以我为自己做了 Halo：
+所以我为自己和朋友做了 Halo：
 - **可视化界面** — 不用再盯着终端输出
 - **一键安装** — 不需要 Node.js，不需要 npm，下载即用
 - **远程访问** — 从手机、平板或任何浏览器控制
@@ -285,6 +275,14 @@ MIT 许可证 — 详见 [LICENSE](../LICENSE)。
 AI 构建 AI。现在人人可用。
 
 ---
+
+## 贡献者
+
+<a href="https://github.com/openkursar/hello-halo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=openkursar/hello-halo" />
+</a>
+
+由我们的贡献者用 ❤️ 打造。
 
 <div align="center">
 

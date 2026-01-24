@@ -4,11 +4,12 @@
 
 # Halo
 
-### L'Interface Manquante pour Claude Code
+### Open Source Cowork for Everyone
 
-Mettez Claude Code dans votre poche — le client de bureau open-source qui rend la puissance de Claude Code accessible à tous. Sans terminal, jamais.
 
-**Notre philosophie :** Envelopper une technologie complexe dans une interaction humaine intuitive.
+Expérimentez toute la puissance d'un AI Agent sans toucher au terminal. Halo apporte une expérience de bureau visuelle et multiplateforme à tous—open source et gratuit.
+
+> **Notre philosophie :** Envelopper une technologie complexe dans une interaction humaine intuitive.
 
 [![GitHub Stars](https://img.shields.io/github/stars/openkursar/hello-halo?style=social)](https://github.com/openkursar/hello-halo/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
@@ -178,6 +179,8 @@ npm run dev
 - **Pas de Backend Requis** — Client de bureau pur, utilisez vos propres clés API
 - **Vraie Boucle d'Agent** — Exécution d'outils, pas seulement génération de texte
 
+> **Powered by [Claude Code](https://github.com/anthropics/claude-code)** — Merci à Anthropic d'avoir construit l'agent IA le plus performant.
+
 ---
 
 ## Ce Que les Gens Construisent
@@ -190,19 +193,6 @@ Halo n'est pas que pour les développeurs. Nous avons vu :
 - **Des développeurs** livrer des fonctionnalités plus vite que jamais
 
 L'obstacle n'est plus la capacité de l'IA. **C'est l'accessibilité.** Halo supprime cet obstacle.
-
----
-
-## Stack Technique
-
-| Couche | Technologie |
-|-------|------------|
-| Framework | Electron + electron-vite |
-| Frontend | React 18 + TypeScript |
-| Styles | Tailwind CSS + patterns shadcn/ui |
-| État | Zustand |
-| Cœur Agent | @anthropic-ai/claude-code SDK |
-| Markdown | react-markdown + highlight.js |
 
 ---
 
@@ -263,7 +253,7 @@ Pendant des réunions ennuyeuses (on y est tous passés), j'ai pensé : *Et si j
 
 Puis est venu un autre problème — mes collègues non-techniques voulaient essayer Claude Code après avoir vu ce qu'il pouvait faire. Mais ils étaient bloqués à l'installation. *"C'est quoi npm ? Comment j'installe Node.js ?"* Certains ont passé des jours à essayer de comprendre.
 
-Alors j'ai construit Halo pour moi :
+Alors j'ai construit Halo pour moi et mes amis :
 - **Interface visuelle** — plus besoin de fixer la sortie terminal
 - **Installation en un clic** — pas de Node.js, pas de npm, juste télécharger et lancer
 - **Accès distant** — contrôle depuis téléphone, tablette, ou n'importe quel navigateur
@@ -273,6 +263,14 @@ La première version a pris quelques heures. Tout après ça ? **100% construit 
 L'IA qui construit l'IA. Maintenant entre les mains de tous.
 
 ---
+
+## Contributeurs
+
+<a href="https://github.com/openkursar/hello-halo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=openkursar/hello-halo" />
+</a>
+
+Made with ❤️ by our contributors.
 
 <div align="center">
 

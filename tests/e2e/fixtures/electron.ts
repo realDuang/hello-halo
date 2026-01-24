@@ -108,8 +108,7 @@ function createTestConfigDir(appPath: string): string {
       theme: 'dark'
     },
     system: {
-      autoLaunch: false,
-      minimizeToTray: false
+      autoLaunch: false
     },
     remoteAccess: {
       enabled: false,

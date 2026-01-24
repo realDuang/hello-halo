@@ -4,11 +4,12 @@
 
 # Halo
 
-### Claude Code に欠けていた UI
+### Open Source Cowork for Everyone
 
-Claude Code をポケットに — 誰もが Claude Code のパワーを使えるようにするオープンソースのデスクトップクライアント。ターミナルは不要。
 
-**私たちの哲学：** 複雑な技術を直感的な人間のインタラクションにラップする。
+ターミナルに触れることなく、AI Agent の全機能を体験できます。Halo は、ビジュアルでクロスプラットフォームなデスクトップ体験をすべての人に提供します—オープンソースで無料。
+
+> **私たちの哲学：** 複雑な技術を直感的な人間のインタラクションにラップする。
 
 [![GitHub Stars](https://img.shields.io/github/stars/openkursar/hello-halo?style=social)](https://github.com/openkursar/hello-halo/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
@@ -178,6 +179,8 @@ npm run dev
 - **バックエンド不要** — 純粋なデスクトップクライアント、自分の API キーを使用
 - **本物の Agent ループ** — テキスト生成だけでなく、ツール実行
 
+> **Powered by [Claude Code](https://github.com/anthropics/claude-code)** — 最も強力な AI エージェントを構築した Anthropic に感謝します。
+
 ---
 
 ## みんなが何を作っているか
@@ -190,19 +193,6 @@ Halo は開発者だけのものではありません。私たちが見てきた
 - **開発者** がこれまで以上に速く機能を提供
 
 障壁はもはや AI の能力ではありません。**アクセシビリティです。** Halo はその障壁を取り除きます。
-
----
-
-## 技術スタック
-
-| レイヤー | テクノロジー |
-|-------|------------|
-| フレームワーク | Electron + electron-vite |
-| フロントエンド | React 18 + TypeScript |
-| スタイリング | Tailwind CSS + shadcn/ui パターン |
-| 状態管理 | Zustand |
-| Agent コア | @anthropic-ai/claude-code SDK |
-| Markdown | react-markdown + highlight.js |
 
 ---
 
@@ -263,7 +253,7 @@ MIT ライセンス — 詳細は [LICENSE](../LICENSE) を参照。
 
 そして別の問題が発生しました — 非技術系の同僚が Claude Code ができることを見て試したがっていました。しかしインストールで詰まりました。*「npm って何？Node.js はどうやってインストールするの？」* 数日かけても分からない人もいました。
 
-だから自分のために Halo を作りました：
+だから自分と友達のために Halo を作りました：
 - **ビジュアルインターフェース** — ターミナル出力を見つめる必要なし
 - **ワンクリックインストール** — Node.js 不要、npm 不要、ダウンロードして実行するだけ
 - **リモートアクセス** — スマートフォン、タブレット、任意のブラウザから制御
@@ -273,6 +263,14 @@ MIT ライセンス — 詳細は [LICENSE](../LICENSE) を参照。
 AI が AI を構築する。今やみんなの手に。
 
 ---
+
+## 貢献者
+
+<a href="https://github.com/openkursar/hello-halo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=openkursar/hello-halo" />
+</a>
+
+Made with ❤️ by our contributors.
 
 <div align="center">
 

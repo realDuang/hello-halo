@@ -205,6 +205,7 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'agent:error': 'onAgentError',
       'agent:complete': 'onAgentComplete',
       'agent:thought': 'onAgentThought',
+      'agent:thought-delta': 'onAgentThoughtDelta',
       'agent:mcp-status': 'onAgentMcpStatus',
       'agent:compact': 'onAgentCompact',
       'remote:status-change': 'onRemoteStatusChange',

@@ -11,7 +11,7 @@ import electronUpdater from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
 
 // Local imports
-import { setIsQuitting } from './tray.service'
+import { getMainWindow } from './window.service'
 
 // Type imports
 const { autoUpdater } = electronUpdater
@@ -41,13 +41,10 @@ if (process.platform === 'darwin') {
   autoUpdater.forceDevUpdateConfig = true
 }
 
-let mainWindow: BrowserWindow | null = null
-
 /**
  * Initialize auto-updater
  */
-export function initAutoUpdater(window: BrowserWindow): void {
-  mainWindow = window
+export function initAutoUpdater(): void {
 
   // Skip updates in development
   if (is.dev) {
@@ -127,6 +124,7 @@ function sendUpdateStatus(
   status: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'manual-download' | 'error',
   data?: Record<string, unknown>
 ): void {
+  const mainWindow = getMainWindow()
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('updater:status', { status, ...data })
   }
@@ -152,16 +150,12 @@ export async function checkForUpdates(): Promise<void> {
  * Quit and install update
  *
  * Important timing considerations for Windows NSIS:
- * 1. Set isQuitting flag to bypass minimize-to-tray behavior
- * 2. Add delay to ensure app fully closes before installer starts
- * 3. Use isSilent=false to show installer UI, isForceRunAfter=true to restart after install
+ * 1. Add delay to ensure app fully closes before installer starts
+ * 2. Use isSilent=false to show installer UI, isForceRunAfter=true to restart after install
  *
  * @see https://github.com/electron-userland/electron-builder/issues/1368
  */
 export function quitAndInstall(): void {
-  // Bypass minimize-to-tray behavior during update
-  setIsQuitting(true)
-
   // Delay to ensure all windows close before installer launches
   setTimeout(() => {
     try {

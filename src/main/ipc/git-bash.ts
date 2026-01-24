@@ -2,19 +2,17 @@
  * Git Bash IPC Handlers - Windows Git Bash detection and installation
  */
 
-import { ipcMain, shell, BrowserWindow } from 'electron'
+import { ipcMain, shell } from 'electron'
 import { detectGitBash, setGitBashPathEnv } from '../services/git-bash.service'
 import { downloadAndInstallGitBash } from '../services/git-bash-installer.service'
 import { createMockBash, cleanupMockBash } from '../services/mock-bash.service'
 import { getConfig, saveConfig } from '../services/config.service'
-
-let mainWindow: BrowserWindow | null = null
+import { getMainWindow } from '../services/window.service'
 
 /**
  * Register Git Bash IPC handlers
  */
-export function registerGitBashHandlers(window: BrowserWindow | null): void {
-  mainWindow = window
+export function registerGitBashHandlers(): void {
 
   // Get Git Bash detection status
   // This should be called by renderer to check if Git Bash is available
@@ -53,8 +51,9 @@ export function registerGitBashHandlers(window: BrowserWindow | null): void {
     try {
       const result = await downloadAndInstallGitBash((progress) => {
         // Send progress to renderer via the specified channel
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send(progressChannel, progress)
+        const window = getMainWindow()
+        if (window && !window.isDestroyed()) {
+          window.webContents.send(progressChannel, progress)
         }
       })
 

@@ -7,16 +7,19 @@
 
 import { ipcMain, BrowserWindow } from 'electron'
 import { searchService, SearchResult } from '../services/search.service'
+import { getMainWindow, onMainWindowChange } from '../services/window.service'
 
 let mainWindow: BrowserWindow | null = null
 let currentSearchId: string | null = null
 
 /**
  * Initialize search IPC handlers
- * @param window - Main browser window for sending progress updates
  */
-export function initializeSearchHandlers(window: BrowserWindow | null): void {
-  mainWindow = window
+export function initializeSearchHandlers(): void {
+  // Subscribe to window changes
+  onMainWindowChange((window) => {
+    mainWindow = window
+  })
 
   /**
    * Execute search across conversations

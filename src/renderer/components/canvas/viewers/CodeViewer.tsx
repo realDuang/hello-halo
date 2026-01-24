@@ -1,180 +1,293 @@
 /**
- * Code Viewer - Syntax highlighted code display
+ * Code Viewer - Read-first code viewer with edit capability
  *
  * Features:
- * - Syntax highlighting via highlight.js
- * - Line numbers
- * - Copy to clipboard
+ * - CodeMirror 6 powered with virtual scrolling (large file support)
+ * - Default read-only mode (99% use case)
+ * - Optional edit mode with save/cancel
+ * - Syntax highlighting for 20+ languages
+ * - Code folding, search (Cmd+F), line numbers
  * - Scroll position preservation
- * - Window maximize for fullscreen viewing
+ * - Copy to clipboard, open external
  */
 
-import { useRef, useEffect, useState, useCallback } from 'react'
-import { Copy, Check, ExternalLink } from 'lucide-react'
-import { highlightCode } from '../../../lib/highlight-loader'
+import { useRef, useState, useCallback, useMemo } from 'react'
+import {
+  Copy,
+  Check,
+  ExternalLink,
+  Pencil,
+  Save,
+  X,
+  FileCode,
+} from 'lucide-react'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
 import { useTranslation } from '../../../i18n'
+import { CodeMirrorEditor, type CodeMirrorEditorRef } from './CodeMirrorEditor'
+
+// ============================================
+// Types
+// ============================================
 
 interface CodeViewerProps {
   tab: CanvasTab
   onScrollChange?: (position: number) => void
+  onContentChange?: (content: string) => void
+  onSaveComplete?: (content: string) => void
 }
 
-export function CodeViewer({ tab, onScrollChange }: CodeViewerProps) {
+// ============================================
+// Component
+// ============================================
+
+export function CodeViewer({ tab, onScrollChange, onContentChange, onSaveComplete }: CodeViewerProps) {
   const { t } = useTranslation()
-  const containerRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<CodeMirrorEditorRef>(null)
+
+  // State
   const [copied, setCopied] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
-  // Restore scroll position when tab becomes active
-  useEffect(() => {
-    if (containerRef.current && tab.scrollPosition !== undefined) {
-      containerRef.current.scrollTop = tab.scrollPosition
-    }
-  }, [tab.id])
+  // Computed values
+  const canOpenExternal = !api.isRemoteMode() && tab.path
+  const canEdit = !!tab.path // Can only edit files with a path
+  const lineCount = useMemo(() => (tab.content || '').split('\n').length, [tab.content])
 
-  // Save scroll position on scroll
-  const handleScroll = useCallback(() => {
-    if (containerRef.current && onScrollChange) {
-      onScrollChange(containerRef.current.scrollTop)
-    }
-  }, [onScrollChange])
+  // ============================================
+  // Handlers
+  // ============================================
 
   // Copy content to clipboard
-  const handleCopy = async () => {
-    if (!tab.content) return
+  const handleCopy = useCallback(async () => {
+    const content = editorRef.current?.getContent() || tab.content
+    if (!content) return
+
     try {
-      await navigator.clipboard.writeText(tab.content)
+      await navigator.clipboard.writeText(content)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch (err) {
       console.error('Failed to copy:', err)
     }
-  }
+  }, [tab.content])
 
   // Open with external application
-  const handleOpenExternal = async () => {
+  const handleOpenExternal = useCallback(async () => {
     if (!tab.path) return
     try {
       await api.openArtifact(tab.path)
     } catch (err) {
       console.error('Failed to open with external app:', err)
     }
-  }
+  }, [tab.path])
 
-  // Highlight code
-  const highlightedCode = useHighlightedCode(tab.content || '', tab.language)
-  const canOpenExternal = !api.isRemoteMode() && tab.path
+  // Enter edit mode
+  const handleEnterEdit = useCallback(() => {
+    setIsEditing(true)
+    setSaveError(null)
+    // Focus editor after mode switch
+    setTimeout(() => {
+      editorRef.current?.focus()
+    }, 100)
+  }, [])
 
-  // Count lines
-  const lineCount = (tab.content || '').split('\n').length
+  // Cancel edit mode
+  const handleCancelEdit = useCallback(() => {
+    // Restore original content
+    if (editorRef.current) {
+      editorRef.current.setContent(tab.content || '')
+    }
+    setIsEditing(false)
+    setSaveError(null)
+  }, [tab.content])
+
+  // Save changes
+  const handleSave = useCallback(async () => {
+    if (!tab.path || !editorRef.current) return
+
+    const newContent = editorRef.current.getContent()
+
+    // Check if content actually changed
+    if (!editorRef.current.hasChanges()) {
+      setIsEditing(false)
+      return
+    }
+
+    setIsSaving(true)
+    setSaveError(null)
+
+    try {
+      const result = await api.saveArtifactContent(tab.path, newContent)
+
+      if (result.success) {
+        // Mark tab as saved (clears dirty flag) via callback
+        if (onSaveComplete) {
+          onSaveComplete(newContent)
+        }
+        setIsEditing(false)
+      } else {
+        setSaveError(result.error || t('Failed to save file'))
+      }
+    } catch (err) {
+      console.error('Failed to save:', err)
+      setSaveError((err as Error).message || t('Failed to save file'))
+    } finally {
+      setIsSaving(false)
+    }
+  }, [tab.path, onSaveComplete, t])
+
+  // Handle scroll
+  const handleScroll = useCallback(
+    (position: number) => {
+      if (onScrollChange) {
+        onScrollChange(position)
+      }
+    },
+    [onScrollChange]
+  )
+
+  // Handle keyboard shortcuts
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Cmd/Ctrl + S to save in edit mode
+      if (isEditing && (e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault()
+        handleSave()
+      }
+      // Escape to cancel edit
+      if (isEditing && e.key === 'Escape') {
+        e.preventDefault()
+        handleCancelEdit()
+      }
+    },
+    [isEditing, handleSave, handleCancelEdit]
+  )
+
+  // ============================================
+  // Render
+  // ============================================
 
   return (
-    <div className="relative flex flex-col h-full bg-background">
+    <div
+      className="relative flex flex-col h-full bg-background"
+      onKeyDown={handleKeyDown}
+    >
       {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card/50">
+        {/* Left: File info */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <FileCode className="w-3.5 h-3.5 text-muted-foreground/60" />
           <span className="font-mono">{tab.language || 'text'}</span>
           <span className="text-muted-foreground/50">·</span>
           <span>{t('{{count}} lines', { count: lineCount })}</span>
-          {tab.mimeType && (
+          {/* mimeType hidden - redundant with language in most cases */}
+          {/* {tab.mimeType && (
             <>
               <span className="text-muted-foreground/50">·</span>
               <span>{tab.mimeType}</span>
             </>
+          )} */}
+          {isEditing && (
+            <>
+              <span className="text-muted-foreground/50">·</span>
+              <span className="text-primary font-medium">{t('Editing')}</span>
+            </>
           )}
         </div>
 
+        {/* Right: Actions */}
         <div className="flex items-center gap-1">
-          {/* Copy button */}
-          <button
-            onClick={handleCopy}
-            className="p-1.5 rounded hover:bg-secondary transition-colors"
-            title={t('Copy code')}
-          >
-            {copied ? (
-              <Check className="w-4 h-4 text-green-500" />
-            ) : (
-              <Copy className="w-4 h-4 text-muted-foreground" />
-            )}
-          </button>
+          {isEditing ? (
+            // Edit mode actions
+            <>
+              {/* Save error message */}
+              {saveError && (
+                <span className="text-xs text-destructive mr-2">{saveError}</span>
+              )}
 
-          {/* Open with external app */}
-          {canOpenExternal && (
-            <button
-              onClick={handleOpenExternal}
-              className="p-1.5 rounded hover:bg-secondary transition-colors"
-              title={t('Open in external application')}
-            >
-              <ExternalLink className="w-4 h-4 text-muted-foreground" />
-            </button>
+              {/* Cancel button */}
+              <button
+                onClick={handleCancelEdit}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded
+                         hover:bg-secondary transition-colors text-muted-foreground
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+                title={t('Cancel (Esc)')}
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>{t('Cancel')}</span>
+              </button>
+
+              {/* Save button */}
+              <button
+                onClick={handleSave}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded
+                         bg-primary text-primary-foreground hover:bg-primary/90
+                         transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={t('Save (⌘S)')}
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{isSaving ? t('Saving...') : t('Save')}</span>
+              </button>
+            </>
+          ) : (
+            // View mode actions
+            <>
+              {/* Edit button */}
+              {canEdit && (
+                <button
+                  onClick={handleEnterEdit}
+                  className="p-1.5 rounded hover:bg-secondary transition-colors"
+                  title={t('Edit file')}
+                >
+                  <Pencil className="w-4 h-4 text-muted-foreground" />
+                </button>
+              )}
+
+              {/* Copy button */}
+              <button
+                onClick={handleCopy}
+                className="p-1.5 rounded hover:bg-secondary transition-colors"
+                title={t('Copy code')}
+              >
+                {copied ? (
+                  <Check className="w-4 h-4 text-green-500" />
+                ) : (
+                  <Copy className="w-4 h-4 text-muted-foreground" />
+                )}
+              </button>
+
+              {/* Open with external app */}
+              {canOpenExternal && (
+                <button
+                  onClick={handleOpenExternal}
+                  className="p-1.5 rounded hover:bg-secondary transition-colors"
+                  title={t('Open in external application')}
+                >
+                  <ExternalLink className="w-4 h-4 text-muted-foreground" />
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {/* Code content */}
-      <div
-        ref={containerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-auto font-mono text-sm"
-      >
-        <div className="flex min-h-full">
-          {/* Line numbers */}
-          <div className="sticky left-0 flex-shrink-0 select-none bg-background/80 backdrop-blur-sm border-r border-border/50 text-right text-muted-foreground/40 pr-3 pl-4 py-4 leading-6">
-            {Array.from({ length: lineCount }, (_, i) => (
-              <div key={i + 1}>
-                {i + 1}
-              </div>
-            ))}
-          </div>
-
-          {/* Code */}
-          <pre className="flex-1 py-4 pl-4 pr-4 overflow-x-auto m-0">
-            <code
-              className={`hljs ${tab.language ? `language-${tab.language}` : ''}`}
-              dangerouslySetInnerHTML={{ __html: highlightedCode }}
-            />
-          </pre>
-        </div>
+      {/* Code Editor */}
+      <div className="flex-1 overflow-hidden">
+        <CodeMirrorEditor
+          ref={editorRef}
+          content={tab.content || ''}
+          language={tab.language}
+          readOnly={!isEditing}
+          onChange={isEditing ? onContentChange : undefined}
+          onScroll={handleScroll}
+          scrollPosition={tab.scrollPosition}
+        />
       </div>
     </div>
   )
-}
-
-/**
- * Hook to highlight code with lazy-loaded highlight.js
- * Loads language definitions on-demand for better performance
- */
-function useHighlightedCode(code: string, language?: string): string {
-  const [highlighted, setHighlighted] = useState('')
-
-  useEffect(() => {
-    if (!code) {
-      setHighlighted('')
-      return
-    }
-
-    // Use async highlight with language auto-loading
-    let cancelled = false
-    highlightCode(code, language).then(result => {
-      if (!cancelled) {
-        setHighlighted(result)
-      }
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [code, language])
-
-  return highlighted
-}
-
-/**
- * Escape HTML special characters
- */
-function escapeHtml(text: string): string {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
 }

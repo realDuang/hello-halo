@@ -69,10 +69,9 @@ export interface AppearanceConfig {
   theme: ThemeMode;
 }
 
-// System configuration for auto-launch and tray behavior
+// System configuration for auto-launch behavior
 export interface SystemConfig {
   autoLaunch: boolean;      // Launch on system startup
-  minimizeToTray: boolean;  // Minimize to tray instead of quitting on window close
 }
 
 // Remote access configuration
@@ -336,6 +335,16 @@ export interface ArtifactTreeNode {
   size?: number;
   children?: ArtifactTreeNode[];
   depth: number;
+  childrenLoaded?: boolean;  // For lazy loading - indicates if children have been fetched
+}
+
+// Artifact change event from file watcher
+export interface ArtifactChangeEvent {
+  type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir';
+  path: string;
+  relativePath: string;
+  spaceId: string;
+  item?: Artifact | ArtifactTreeNode;
 }
 
 // View mode for artifact display
@@ -359,6 +368,15 @@ export interface Thought {
   isError?: boolean;
   // For result thoughts
   duration?: number;
+  // For streaming state (real-time updates)
+  isStreaming?: boolean;  // True while content is being streamed
+  isReady?: boolean;      // True when tool params are complete (for tool_use)
+  // For merged tool result display (tool_use contains its result)
+  toolResult?: {
+    output: string;
+    isError: boolean;
+    timestamp: string;
+  };
 }
 
 // Legacy alias for backwards compatibility
@@ -529,8 +547,7 @@ export const DEFAULT_CONFIG: HaloConfig = {
     theme: 'system'
   },
   system: {
-    autoLaunch: false,
-    minimizeToTray: false
+    autoLaunch: false
   },
   remoteAccess: {
     enabled: false,

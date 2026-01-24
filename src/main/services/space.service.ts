@@ -1,5 +1,10 @@
 /**
  * Space Service - Manages workspaces/spaces
+ *
+ * PERFORMANCE OPTIMIZED:
+ * - Async stats calculation
+ * - Fast estimation for large directories
+ * - Caching for repeated access
  */
 
 import { shell } from 'electron'
@@ -7,6 +12,18 @@ import { join, basename } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from 'fs'
 import { getHaloDir, getTempSpacePath, getSpacesDir } from './config.service'
 import { v4 as uuidv4 } from 'uuid'
+
+// Re-export config helper for backward compatibility with existing imports
+export { getSpacesDir } from './config.service'
+
+// Cache for space stats to avoid repeated scanning
+interface StatsCache {
+  artifactCount: number
+  conversationCount: number
+  timestamp: number
+}
+const statsCache = new Map<string, StatsCache>()
+const STATS_CACHE_TTL = 30000 // 30 seconds
 
 interface Space {
   id: string
@@ -127,53 +144,86 @@ export function getAllSpacePaths(): string[] {
   return paths
 }
 
-// Get space stats
+/**
+ * Get space stats (sync version, with caching)
+ * Uses cache to avoid repeated expensive scans
+ */
 function getSpaceStats(spacePath: string): { artifactCount: number; conversationCount: number } {
-  const artifactsDir = join(spacePath, 'artifacts')
-  const conversationsDir = join(spacePath, '.halo', 'conversations')
+  // Check cache first
+  const cached = statsCache.get(spacePath)
+  const now = Date.now()
+  if (cached && now - cached.timestamp < STATS_CACHE_TTL) {
+    return { artifactCount: cached.artifactCount, conversationCount: cached.conversationCount }
+  }
 
+  const startTime = performance.now()
+
+  // Fast estimation: only count top-level items for artifacts
+  // This is much faster than recursive counting for large projects
   let artifactCount = 0
   let conversationCount = 0
 
-  // Count artifacts (all files in artifacts folder)
+  // Determine artifact directory based on space type
+  const isTemp = spacePath === getTempSpacePath()
+  const artifactsDir = isTemp ? join(spacePath, 'artifacts') : spacePath
+
+  // Count artifacts - fast estimation (top-level only for non-temp, or artifacts folder for temp)
   if (existsSync(artifactsDir)) {
-    const countFiles = (dir: string): number => {
-      let count = 0
-      const items = readdirSync(dir)
-      for (const item of items) {
-        const itemPath = join(dir, item)
-        const stat = statSync(itemPath)
-        if (stat.isFile() && !item.startsWith('.')) {
-          count++
-        } else if (stat.isDirectory()) {
-          count += countFiles(itemPath)
-        }
-      }
-      return count
-    }
-    artifactCount = countFiles(artifactsDir)
-  }
-
-  // For temp space, artifacts are directly in the folder
-  if (spacePath === getTempSpacePath()) {
-    const tempArtifactsDir = join(spacePath, 'artifacts')
-    if (existsSync(tempArtifactsDir)) {
-      artifactCount = readdirSync(tempArtifactsDir).filter(f => !f.startsWith('.')).length
+    try {
+      const items = readdirSync(artifactsDir)
+      // For temp space, count all non-hidden files in artifacts folder
+      // For regular space, count top-level items (excluding .halo and common ignored dirs)
+      const ignoredDirs = new Set(['.halo', '.git', 'node_modules', '__pycache__', 'dist', 'build'])
+      artifactCount = items.filter(item =>
+        !item.startsWith('.') && (isTemp || !ignoredDirs.has(item))
+      ).length
+    } catch (error) {
+      console.error(`[Space] Error counting artifacts:`, error)
     }
   }
 
-  // Count conversations
+  // Count conversations - this is already fast (just .json files in one directory)
+  const conversationsDir = isTemp
+    ? join(spacePath, 'conversations')
+    : join(spacePath, '.halo', 'conversations')
+
   if (existsSync(conversationsDir)) {
-    conversationCount = readdirSync(conversationsDir).filter(f => f.endsWith('.json')).length
-  } else {
-    // For temp space
-    const tempConvDir = join(spacePath, 'conversations')
-    if (existsSync(tempConvDir)) {
-      conversationCount = readdirSync(tempConvDir).filter(f => f.endsWith('.json')).length
+    try {
+      const indexPath = join(conversationsDir, 'index.json')
+      if (existsSync(indexPath)) {
+        // Use index.json for fast count (already has conversation metadata)
+        const indexContent = readFileSync(indexPath, 'utf-8')
+        const index = JSON.parse(indexContent)
+        conversationCount = Array.isArray(index) ? index.length : Object.keys(index).length
+      } else {
+        // Fallback: count .json files
+        conversationCount = readdirSync(conversationsDir).filter(f =>
+          f.endsWith('.json') && f !== 'index.json'
+        ).length
+      }
+    } catch (error) {
+      console.error(`[Space] Error counting conversations:`, error)
     }
   }
+
+  // Update cache
+  statsCache.set(spacePath, {
+    artifactCount,
+    conversationCount,
+    timestamp: now
+  })
+
+  const elapsed = performance.now() - startTime
+  console.log(`[Space] ⏱️ getSpaceStats completed: ${artifactCount} artifacts, ${conversationCount} conversations in ${elapsed.toFixed(1)}ms (path=${spacePath})`)
 
   return { artifactCount, conversationCount }
+}
+
+/**
+ * Invalidate stats cache for a space
+ */
+export function invalidateStatsCache(spacePath: string): void {
+  statsCache.delete(spacePath)
 }
 
 // Get Halo temp space

@@ -87,15 +87,9 @@ export function SpacePage() {
   // Canvas state - use precise selectors to minimize re-renders
   const isCanvasOpen = useCanvasIsOpen()
   const isCanvasMaximized = useCanvasIsMaximized()
-  // Only subscribe to tab count, not entire tabs array (avoid re-render on tab content changes)
-  const canvasTabCount = useCanvasStore(state => state.tabs.length)
   const isCanvasTransitioning = useCanvasStore(state => state.isTransitioning)
   const setCanvasOpen = useCanvasStore(state => state.setOpen)
   const setCanvasMaximized = useCanvasStore(state => state.setMaximized)
-  // Detect if any browser tab is open (native BrowserView)
-  // When browser tabs exist, disable CSS transitions to sync with native view resize
-  // Use selector to compute this inside store subscription (avoids subscribing to full tabs array)
-  const hasBrowserTab = useCanvasStore(state => state.tabs.some(tab => tab.type === 'browser'))
 
   // Mobile detection
   const isMobile = useIsMobile()
@@ -426,20 +420,13 @@ export function SpacePage() {
                 ref={chatContainerRef}
                 className={`
                   flex flex-col min-w-0 relative
-                  ${hasBrowserTab ? '' : 'transition-[border-color] duration-300 ease-out'}
                   ${isCanvasOpen ? 'border-r border-border/60' : 'flex-1 border-r border-transparent'}
-                  ${isCanvasTransitioning ? 'pointer-events-none' : ''}
                 `}
                 style={{
                   width: isCanvasOpen ? dragChatWidth : undefined,
                   flex: isCanvasOpen ? 'none' : '1',
                   minWidth: isCanvasOpen ? chatWidthMin : undefined,
                   maxWidth: isCanvasOpen ? chatWidthMax : undefined,
-                  // Disable transition when browser tab exists (sync with native BrowserView)
-                  transition: (isDraggingChat || hasBrowserTab)
-                    ? 'none'
-                    : 'width 0.3s, flex 0.3s, border-color 0.3s',
-                  willChange: isCanvasTransitioning ? 'width, flex' : 'auto',
                 }}
               >
                 <ChatView isCompact={isCanvasOpen} />
@@ -463,18 +450,10 @@ export function SpacePage() {
             <div
               className={`
                 min-w-0 overflow-hidden
-                ${hasBrowserTab ? '' : 'transition-all duration-300 ease-out'}
                 ${isCanvasOpen || isCanvasMaximized
                   ? 'flex-1 opacity-100'
                   : 'w-0 flex-none opacity-0'}
-                ${isCanvasTransitioning ? 'pointer-events-none' : ''}
               `}
-              style={{
-                willChange: isCanvasTransitioning ? 'width, opacity, transform' : 'auto',
-                transform: isCanvasOpen || isCanvasMaximized ? 'translateX(0) scale(1)' : 'translateX(20px) scale(0.98)',
-                // Disable transition when browser tab exists (sync with native BrowserView)
-                transition: hasBrowserTab ? 'none' : undefined,
-              }}
             >
               {(isCanvasOpen || isCanvasMaximized || isCanvasTransitioning) && <ContentCanvas />}
             </div>

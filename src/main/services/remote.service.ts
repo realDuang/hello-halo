@@ -67,14 +67,13 @@ function getLocalIp(): string | null {
  * Enable remote access (start HTTP server)
  */
 export async function enableRemoteAccess(
-  mainWindow: BrowserWindow | null,
   port?: number
 ): Promise<RemoteAccessStatus> {
   if (isServerRunning()) {
     return getRemoteAccessStatus()
   }
 
-  const { port: actualPort, token } = await startHttpServer(mainWindow, port)
+  const { port: actualPort, token } = await startHttpServer(port)
 
   // Update config
   const config = getConfig()

@@ -371,6 +371,19 @@ async function processMessageStream(
   let isStreamingTextBlock = false  // True when inside a text content block
   const STREAM_THROTTLE_MS = 30  // Throttle updates to ~33fps
 
+  // Streaming block state - track active blocks by index for delta/stop correlation
+  // Key: block index, Value: { type, thoughtId, content/partialJson }
+  const streamingBlocks = new Map<number, {
+    type: 'thinking' | 'tool_use'
+    thoughtId: string
+    content: string  // For thinking: accumulated thinking text, for tool_use: accumulated partial JSON
+    toolName?: string
+    toolId?: string
+  }>()
+
+  // Tool ID to Thought ID mapping - for merging tool_result into tool_use
+  const toolIdToThoughtId = new Map<string, string>()
+
   const t1 = Date.now()
   console.log(`[Agent][${conversationId}] Sending message to V2 session...`)
   if (images && images.length > 0) {
@@ -446,6 +459,54 @@ async function processMessageStream(
         console.log(`[Agent][${conversationId}] ⏱️ Text block started (isNewTextBlock signal): ${Date.now() - t1}ms after send`)
       }
 
+      // ========== Thinking block streaming ==========
+      // Thinking block started - send empty thought immediately
+      if (event.type === 'content_block_start' && event.content_block?.type === 'thinking') {
+        const blockIndex = event.index ?? 0
+        const thoughtId = `thought-thinking-${Date.now()}-${blockIndex}`
+
+        // Track this block for delta correlation
+        streamingBlocks.set(blockIndex, {
+          type: 'thinking',
+          thoughtId,
+          content: ''
+        })
+
+        // Create and send streaming thought immediately
+        const thought: Thought = {
+          id: thoughtId,
+          type: 'thinking',
+          content: '',
+          timestamp: new Date().toISOString(),
+          isStreaming: true
+        }
+
+        // Add to session state
+        sessionState.thoughts.push(thought)
+
+        // Send to renderer for immediate display
+        sendToRenderer('agent:thought', spaceId, conversationId, { thought })
+        console.log(`[Agent][${conversationId}] ⏱️ Thinking block started (streaming): ${Date.now() - t1}ms after send`)
+      }
+
+      // Thinking delta - append to thought content
+      if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
+        const blockIndex = event.index ?? 0
+        const blockState = streamingBlocks.get(blockIndex)
+
+        if (blockState && blockState.type === 'thinking') {
+          const delta = event.delta.thinking || ''
+          blockState.content += delta
+
+          // Send delta to renderer for incremental update
+          sendToRenderer('agent:thought-delta', spaceId, conversationId, {
+            thoughtId: blockState.thoughtId,
+            delta,
+            content: blockState.content  // Also send full content for fallback
+          })
+        }
+      }
+
       // Text delta - accumulate locally, send delta to frontend
       if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && isStreamingTextBlock) {
         const delta = event.delta.text || ''
@@ -460,19 +521,148 @@ async function processMessageStream(
         })
       }
 
-      // Text block ended
-      if (event.type === 'content_block_stop' && isStreamingTextBlock) {
-        isStreamingTextBlock = false
-        // Send final content of this block
-        sendToRenderer('agent:message', spaceId, conversationId, {
-          type: 'message',
-          content: currentStreamingText,
-          isComplete: false,
-          isStreaming: false
+      // ========== Tool use block streaming ==========
+      // Tool use block started - send thought with tool name immediately
+      if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+        const blockIndex = event.index ?? 0
+        const toolId = event.content_block.id || `tool-${Date.now()}`
+        const toolName = event.content_block.name || 'Unknown'
+        const thoughtId = `thought-tool-${Date.now()}-${blockIndex}`
+
+        // Track this block for delta correlation
+        streamingBlocks.set(blockIndex, {
+          type: 'tool_use',
+          thoughtId,
+          content: '',  // Will accumulate partial JSON
+          toolName,
+          toolId
         })
-        // Update lastTextContent for final result
-        lastTextContent = currentStreamingText
-        console.log(`[Agent][${conversationId}] Text block completed, length: ${currentStreamingText.length}`)
+
+        // Create and send streaming tool thought immediately
+        const thought: Thought = {
+          id: thoughtId,
+          type: 'tool_use',
+          content: '',
+          timestamp: new Date().toISOString(),
+          toolName,
+          toolInput: {},  // Empty initially, will be populated on stop
+          isStreaming: true,
+          isReady: false  // Params not complete yet
+        }
+
+        // Add to session state
+        sessionState.thoughts.push(thought)
+
+        // Send to renderer for immediate display (shows tool name, "准备中...")
+        sendToRenderer('agent:thought', spaceId, conversationId, { thought })
+        console.log(`[Agent][${conversationId}] ⏱️ Tool block started [${toolName}] (streaming): ${Date.now() - t1}ms after send`)
+      }
+
+      // Tool use input JSON delta - accumulate partial JSON
+      if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+        const blockIndex = event.index ?? 0
+        const blockState = streamingBlocks.get(blockIndex)
+
+        if (blockState && blockState.type === 'tool_use') {
+          const partialJson = event.delta.partial_json || ''
+          blockState.content += partialJson
+
+          // Send delta to renderer (for progress indication, not for parsing)
+          sendToRenderer('agent:thought-delta', spaceId, conversationId, {
+            thoughtId: blockState.thoughtId,
+            delta: partialJson,
+            isToolInput: true  // Flag: this is tool input JSON, not thinking text
+          })
+        }
+      }
+
+      // ========== Block stop handling ==========
+      // content_block_stop - finalize streaming blocks
+      if (event.type === 'content_block_stop') {
+        const blockIndex = event.index ?? 0
+        const blockState = streamingBlocks.get(blockIndex)
+
+        if (blockState) {
+          if (blockState.type === 'thinking') {
+            // Thinking block complete - send final state
+            sendToRenderer('agent:thought-delta', spaceId, conversationId, {
+              thoughtId: blockState.thoughtId,
+              content: blockState.content,
+              isComplete: true  // Signal: thinking is complete
+            })
+
+            // Update session state thought
+            const thought = sessionState.thoughts.find(t => t.id === blockState.thoughtId)
+            if (thought) {
+              thought.content = blockState.content
+              thought.isStreaming = false
+            }
+
+            console.log(`[Agent][${conversationId}] Thinking block complete, length: ${blockState.content.length}`)
+          } else if (blockState.type === 'tool_use') {
+            // Tool use block complete - parse JSON and send final state
+            let toolInput: Record<string, unknown> = {}
+            try {
+              if (blockState.content) {
+                toolInput = JSON.parse(blockState.content)
+              }
+            } catch (e) {
+              console.error(`[Agent][${conversationId}] Failed to parse tool input JSON:`, e)
+            }
+
+            // Record mapping for merging tool_result later
+            if (blockState.toolId) {
+              toolIdToThoughtId.set(blockState.toolId, blockState.thoughtId)
+            }
+
+            // Send complete signal with parsed input
+            sendToRenderer('agent:thought-delta', spaceId, conversationId, {
+              thoughtId: blockState.thoughtId,
+              toolInput,
+              isComplete: true,  // Signal: tool params are complete
+              isReady: true,     // Tool is ready for execution
+              isToolInput: true  // Flag: this is tool input completion (triggers isReady update in frontend)
+            })
+
+            // Update session state thought
+            const thought = sessionState.thoughts.find(t => t.id === blockState.thoughtId)
+            if (thought) {
+              thought.toolInput = toolInput
+              thought.isStreaming = false
+              thought.isReady = true
+            }
+
+            // Send tool-call event for tool approval/tracking
+            // This replaces the event that was previously sent from parseSDKMessage
+            const toolCall: ToolCall = {
+              id: blockState.toolId || blockState.thoughtId,
+              name: blockState.toolName || '',
+              status: 'running',
+              input: toolInput
+            }
+            sendToRenderer('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
+
+            console.log(`[Agent][${conversationId}] Tool block complete [${blockState.toolName}], input: ${JSON.stringify(toolInput).substring(0, 100)}`)
+          }
+
+          // Clean up tracking state
+          streamingBlocks.delete(blockIndex)
+        }
+
+        // Handle text block stop (existing logic)
+        if (isStreamingTextBlock) {
+          isStreamingTextBlock = false
+          // Send final content of this block
+          sendToRenderer('agent:message', spaceId, conversationId, {
+            type: 'message',
+            content: currentStreamingText,
+            isComplete: false,
+            isStreaming: false
+          })
+          // Update lastTextContent for final result
+          lastTextContent = currentStreamingText
+          console.log(`[Agent][${conversationId}] Text block completed, length: ${currentStreamingText.length}`)
+        }
       }
 
       continue  // stream_event handled, skip normal processing
@@ -505,57 +695,97 @@ async function processMessageStream(
     const thought = parseSDKMessage(sdkMessage, displayModel)
 
     if (thought) {
-      // Accumulate thought in backend session (Single Source of Truth)
-      sessionState.thoughts.push(thought)
+      // Handle tool_result specially - merge into corresponding tool_use thought
+      if (thought.type === 'tool_result') {
+        const toolUseThoughtId = toolIdToThoughtId.get(thought.id)
+        if (toolUseThoughtId) {
+          // Found corresponding tool_use - merge result into it
+          const toolResult = {
+            output: thought.toolOutput || '',
+            isError: thought.isError || false,
+            timestamp: thought.timestamp
+          }
 
-      // Send ALL thoughts to renderer for real-time display in thought process area
-      // This includes text blocks - they appear in the timeline during generation
-      sendToRenderer('agent:thought', spaceId, conversationId, { thought })
+          // Update backend session state
+          const toolUseThought = sessionState.thoughts.find(t => t.id === toolUseThoughtId)
+          if (toolUseThought) {
+            toolUseThought.toolResult = toolResult
+          }
 
-      // Handle specific thought types
-      if (thought.type === 'text') {
-        // Keep only the latest text block (overwritten by each new text block)
-        // This becomes the final reply when generation completes
-        // Intermediate texts stay in the thought process area only
-        lastTextContent = thought.content
+          // Send thought-delta to merge result into tool_use on frontend
+          sendToRenderer('agent:thought-delta', spaceId, conversationId, {
+            thoughtId: toolUseThoughtId,
+            toolResult,
+            isToolResult: true  // Flag: this is a tool result merge
+          })
 
-        // Send streaming update - frontend shows this during generation
-        sendToRenderer('agent:message', spaceId, conversationId, {
-          type: 'message',
-          content: lastTextContent,
-          isComplete: false
-        })
-      } else if (thought.type === 'tool_use') {
-        // Send tool call event
-        const toolCall: ToolCall = {
-          id: thought.id,
-          name: thought.toolName || '',
-          status: 'running',
-          input: thought.toolInput || {}
+          // Still send tool-result event for any listeners
+          sendToRenderer('agent:tool-result', spaceId, conversationId, {
+            type: 'tool_result',
+            toolId: thought.id,
+            result: thought.toolOutput || '',
+            isError: thought.isError || false
+          })
+
+          console.log(`[Agent][${conversationId}] Tool result merged into thought ${toolUseThoughtId}`)
+        } else {
+          // No mapping found - fall back to separate thought (shouldn't happen normally)
+          sessionState.thoughts.push(thought)
+          sendToRenderer('agent:thought', spaceId, conversationId, { thought })
+          sendToRenderer('agent:tool-result', spaceId, conversationId, {
+            type: 'tool_result',
+            toolId: thought.id,
+            result: thought.toolOutput || '',
+            isError: thought.isError || false
+          })
+          console.log(`[Agent][${conversationId}] Tool result fallback (no mapping): ${thought.id}`)
         }
-        sendToRenderer('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
-      } else if (thought.type === 'tool_result') {
-        // Send tool result event
-        sendToRenderer('agent:tool-result', spaceId, conversationId, {
-          type: 'tool_result',
-          toolId: thought.id,
-          result: thought.toolOutput || '',
-          isError: thought.isError || false
-        })
-      } else if (thought.type === 'result') {
-        // Final result - use the last text block as the final reply
-        const finalContent = lastTextContent || thought.content
-        sendToRenderer('agent:message', spaceId, conversationId, {
-          type: 'message',
-          content: finalContent,
-          isComplete: true
-        })
-        // Fallback: if no text block was received, use result content for persistence
-        if (!lastTextContent && thought.content) {
+      } else {
+        // Non tool_result thoughts - handle normally
+        // Accumulate thought in backend session (Single Source of Truth)
+        sessionState.thoughts.push(thought)
+
+        // Send ALL thoughts to renderer for real-time display in thought process area
+        // This includes text blocks - they appear in the timeline during generation
+        sendToRenderer('agent:thought', spaceId, conversationId, { thought })
+
+        // Handle specific thought types
+        if (thought.type === 'text') {
+          // Keep only the latest text block (overwritten by each new text block)
+          // This becomes the final reply when generation completes
+          // Intermediate texts stay in the thought process area only
           lastTextContent = thought.content
+
+          // Send streaming update - frontend shows this during generation
+          sendToRenderer('agent:message', spaceId, conversationId, {
+            type: 'message',
+            content: lastTextContent,
+            isComplete: false
+          })
+        } else if (thought.type === 'tool_use') {
+          // Send tool call event
+          const toolCall: ToolCall = {
+            id: thought.id,
+            name: thought.toolName || '',
+            status: 'running',
+            input: thought.toolInput || {}
+          }
+          sendToRenderer('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
+        } else if (thought.type === 'result') {
+          // Final result - use the last text block as the final reply
+          const finalContent = lastTextContent || thought.content
+          sendToRenderer('agent:message', spaceId, conversationId, {
+            type: 'message',
+            content: finalContent,
+            isComplete: true
+          })
+          // Fallback: if no text block was received, use result content for persistence
+          if (!lastTextContent && thought.content) {
+            lastTextContent = thought.content
+          }
+          // Note: updateLastMessage is called after loop to include tokenUsage
+          console.log(`[Agent][${conversationId}] Result thought received, ${sessionState.thoughts.length} thoughts accumulated`)
         }
-        // Note: updateLastMessage is called after loop to include tokenUsage
-        console.log(`[Agent][${conversationId}] Result thought received, ${sessionState.thoughts.length} thoughts accumulated`)
       }
     }
 

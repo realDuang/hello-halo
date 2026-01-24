@@ -10,7 +10,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Copy, Check, Code, Eye, ExternalLink } from 'lucide-react'
+import { Copy, Check, Code, Eye, ExternalLink, Pencil } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
@@ -60,9 +60,10 @@ function resolveImageSrc(src: string | undefined, basePath: string): string {
 interface MarkdownViewerProps {
   tab: CanvasTab
   onScrollChange?: (position: number) => void
+  onEditRequest?: () => void
 }
 
-export function MarkdownViewer({ tab, onScrollChange }: MarkdownViewerProps) {
+export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewMode, setViewMode] = useState<'rendered' | 'source'>('rendered')
@@ -147,6 +148,17 @@ export function MarkdownViewer({ tab, onScrollChange }: MarkdownViewerProps) {
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Edit button */}
+          {onEditRequest && (
+            <button
+              onClick={onEditRequest}
+              className="p-1.5 rounded hover:bg-secondary transition-colors"
+              title={t('Edit')}
+            >
+              <Pencil className="w-4 h-4 text-muted-foreground" />
+            </button>
+          )}
+
           {/* Copy button */}
           <button
             onClick={handleCopy}

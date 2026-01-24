@@ -115,8 +115,23 @@ export function useCanvasLifecycle() {
     []
   )
 
+  const markTabSaved = useCallback(
+    (tabId: string, content?: string) => canvasLifecycle.markTabSaved(tabId, content),
+    []
+  )
+
   const saveScrollPosition = useCallback(
     (tabId: string, position: number) => canvasLifecycle.saveScrollPosition(tabId, position),
+    []
+  )
+
+  const toggleEditMode = useCallback(
+    (tabId: string) => canvasLifecycle.toggleEditMode(tabId),
+    []
+  )
+
+  const setEditMode = useCallback(
+    (tabId: string, editMode: boolean) => canvasLifecycle.setEditMode(tabId, editMode),
     []
   )
 
@@ -165,7 +180,10 @@ export function useCanvasLifecycle() {
     // Content Actions
     refreshTab,
     updateTabContent,
+    markTabSaved,
     saveScrollPosition,
+    toggleEditMode,
+    setEditMode,
 
     // Layout Actions
     setOpen,

@@ -15,17 +15,21 @@ import {
   setCustomPassword,
   regeneratePassword
 } from '../services/remote.service'
+import { getMainWindow, onMainWindowChange } from '../services/window.service'
 
 let mainWindow: BrowserWindow | null = null
 
-export function registerRemoteHandlers(window: BrowserWindow | null): void {
-  mainWindow = window
+export function registerRemoteHandlers(): void {
+  // Subscribe to window changes
+  onMainWindowChange((window) => {
+    mainWindow = window
+  })
 
   // Enable remote access
   ipcMain.handle('remote:enable', async (_event, port?: number) => {
     console.log('[IPC] remote:enable called with port:', port)
     try {
-      const status = await enableRemoteAccess(mainWindow, port)
+      const status = await enableRemoteAccess(port)
       console.log('[IPC] remote:enable success:', status)
       return { success: true, data: status }
     } catch (error: unknown) {

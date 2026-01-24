@@ -115,6 +115,15 @@ export interface Thought {
   toolOutput?: string
   isError?: boolean
   duration?: number
+  // For streaming state (real-time updates)
+  isStreaming?: boolean  // True while content is being streamed
+  isReady?: boolean      // True when tool params are complete (for tool_use)
+  // For merged tool result display (tool_use contains its result)
+  toolResult?: {
+    output: string
+    isError: boolean
+    timestamp: string
+  }
 }
 
 // ============================================

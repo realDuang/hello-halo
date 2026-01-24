@@ -4,7 +4,7 @@
 
 # Halo
 
-### The First Open Source Cowork
+### Open Source Cowork for Everyone
 
 
 Experience the full power of an AI Agent without touching the terminal. Halo brings a visual, cross-platform desktop experience to everyone—open source and free.
@@ -254,7 +254,7 @@ During boring meetings (we've all been there), I thought: *What if I could contr
 
 Then came another problem — my non-technical colleagues wanted to try Claude Code after seeing what it could do. But they got stuck at installation. *"What's npm? How do I install Node.js?"* Some spent days trying to figure it out.
 
-So I built Halo for myself:
+So I built Halo for myself and my friends:
 - **Visual interface** — no more staring at terminal output
 - **One-click install** — no Node.js, no npm, just download and run
 - **Remote access** — control from phone, tablet, or any browser

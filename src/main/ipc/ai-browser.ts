@@ -18,6 +18,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron'
+import { getMainWindow, onMainWindowChange } from '../services/window.service'
 
 // Lazy-loaded module references
 let aiBrowserModule: typeof import('../services/ai-browser') | null = null
@@ -55,14 +56,11 @@ async function ensureInitialized(): Promise<typeof import('../services/ai-browse
  * NOTE: This function only registers IPC handlers.
  * The actual AI Browser module is loaded lazily on first use.
  */
-export function registerAIBrowserHandlers(mainWindow: BrowserWindow | null): void {
-  if (!mainWindow) {
-    console.warn('[AI Browser IPC] No main window provided, skipping registration')
-    return
-  }
-
-  // Store reference for lazy initialization
-  mainWindowRef = mainWindow
+export function registerAIBrowserHandlers(): void {
+  // Subscribe to window changes
+  onMainWindowChange((window) => {
+    mainWindowRef = window
+  })
 
   // NOTE: We do NOT call initializeAIBrowser() here!
   // It will be called lazily when the module is first used.

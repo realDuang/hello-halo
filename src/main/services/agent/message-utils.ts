@@ -131,32 +131,23 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
     const content = message.message?.content
     if (Array.isArray(content)) {
       for (const block of content) {
-        // Thinking blocks
+        // Thinking blocks - SKIP: handled by stream_event (content_block_start/delta/stop)
+        // Streaming provides real-time incremental updates, complete message would duplicate
         if (block.type === 'thinking') {
-          return {
-            id: generateThoughtId(),
-            type: 'thinking',
-            content: block.thinking || '',
-            timestamp
-          }
+          continue  // Skip - already sent via agent:thought + agent:thought-delta
         }
-        // Tool use blocks
+        // Tool use blocks - SKIP: handled by stream_event (content_block_start/delta/stop)
+        // Streaming provides immediate tool name display and param updates
         if (block.type === 'tool_use') {
-          return {
-            id: block.id || generateThoughtId(),
-            type: 'tool_use',
-            content: `Tool call: ${block.name}`,
-            timestamp,
-            toolName: block.name,
-            toolInput: block.input
-          }
+          continue  // Skip - already sent via agent:thought + agent:thought-delta
         }
-        // Text blocks
-        if (block.type === 'text') {
+        // Text blocks - send to timeline for AI intermediate responses display
+        // Note: Message bubble is handled separately by agent:message via stream_event
+        if (block.type === 'text' && block.text) {
           return {
             id: generateThoughtId(),
             type: 'text',
-            content: block.text || '',
+            content: block.text,
             timestamp
           }
         }

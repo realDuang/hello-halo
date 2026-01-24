@@ -20,7 +20,6 @@
  *   - GitBash: Windows Git Bash setup (Windows optional)
  */
 
-import { BrowserWindow } from 'electron'
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerBrowserHandlers } from '../ipc/browser'
@@ -29,19 +28,25 @@ import { registerOverlayHandlers, cleanupOverlayHandlers } from '../ipc/overlay'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
 import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
+import { cleanupAllCaches } from '../services/artifact-cache.service'
+import { markExtendedServicesReady } from './state'
+import { getMainWindow, sendToRenderer } from '../services/window.service'
 
 /**
  * Initialize extended services after window is visible
  *
- * @param mainWindow - The main application window
+ * Window reference is managed by window.service.ts, no need to pass here.
  *
  * These services are loaded asynchronously and do not block the UI.
  * Heavy modules use lazy initialization - they only fully initialize
  * when their features are first accessed.
  */
-export function initializeExtendedServices(mainWindow: BrowserWindow): void {
+export function initializeExtendedServices(): void {
   const start = performance.now()
   console.log('[Bootstrap] Extended services starting...')
+
+  // Get main window for services that still need it directly
+  const mainWindow = getMainWindow()
 
   // === EXTENDED SERVICES ===
   // These services are loaded after the window is visible.
@@ -51,7 +56,7 @@ export function initializeExtendedServices(mainWindow: BrowserWindow): void {
   registerOnboardingHandlers()
 
   // Remote: Remote access feature, optional functionality
-  registerRemoteHandlers(mainWindow)
+  registerRemoteHandlers()
 
   // Browser: Embedded BrowserView for Content Canvas
   // Note: BrowserView is created lazily when Canvas is opened
@@ -59,20 +64,20 @@ export function initializeExtendedServices(mainWindow: BrowserWindow): void {
 
   // AI Browser: AI automation tools (V2 feature)
   // Uses lazy initialization - heavy modules loaded on first tool call
-  registerAIBrowserHandlers(mainWindow)
+  registerAIBrowserHandlers()
 
   // Overlay: Floating UI elements (chat capsule, etc.)
   // Already implements lazy initialization internally
   registerOverlayHandlers(mainWindow)
 
   // Search: Global search functionality
-  initializeSearchHandlers(mainWindow)
+  initializeSearchHandlers()
 
   // Performance: Developer monitoring tools
   registerPerfHandlers(mainWindow)
 
   // GitBash: Windows Git Bash detection and setup
-  registerGitBashHandlers(mainWindow)
+  registerGitBashHandlers()
 
   // Windows-specific: Initialize Git Bash in background
   if (process.platform === 'win32') {
@@ -88,15 +93,17 @@ export function initializeExtendedServices(mainWindow: BrowserWindow): void {
   const duration = performance.now() - start
   console.log(`[Bootstrap] Extended services registered in ${duration.toFixed(1)}ms`)
 
-  // Notify renderer that extended services are ready
+  // Mark state as ready (for Pull-based queries from renderer)
+  // This enables renderer to query status on HMR reload or error recovery
+  markExtendedServicesReady()
+
+  // Notify renderer that extended services are ready (Push-based)
   // This allows renderer to safely call extended service APIs
-  if (!mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('bootstrap:extended-ready', {
-      timestamp: Date.now(),
-      duration: duration
-    })
-    console.log('[Bootstrap] Sent bootstrap:extended-ready to renderer')
-  }
+  sendToRenderer('bootstrap:extended-ready', {
+    timestamp: Date.now(),
+    duration: duration
+  })
+  console.log('[Bootstrap] Sent bootstrap:extended-ready to renderer')
 }
 
 /**
@@ -104,7 +111,7 @@ export function initializeExtendedServices(mainWindow: BrowserWindow): void {
  *
  * Called during window-all-closed to properly release resources.
  */
-export function cleanupExtendedServices(): void {
+export async function cleanupExtendedServices(): Promise<void> {
   // AI Browser: Cleanup MCP server and browser context
   cleanupAIBrowserHandlers()
 
@@ -113,6 +120,9 @@ export function cleanupExtendedServices(): void {
 
   // Search: Cancel any ongoing searches
   cleanupSearchHandlers()
+
+  // Artifact Cache: Close file watchers and clear caches
+  await cleanupAllCaches()
 
   console.log('[Bootstrap] Extended services cleaned up')
 }

@@ -424,6 +424,38 @@ export const api = {
     return httpRequest('GET', `/api/spaces/${spaceId}/artifacts/tree`)
   },
 
+  // Load children for lazy tree expansion
+  loadArtifactChildren: async (spaceId: string, dirPath: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.loadArtifactChildren(spaceId, dirPath)
+    }
+    return httpRequest('POST', `/api/spaces/${spaceId}/artifacts/children`, { dirPath })
+  },
+
+  // Initialize file watcher for a space
+  initArtifactWatcher: async (spaceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.initArtifactWatcher(spaceId)
+    }
+    // In remote mode, watcher is managed by server
+    return { success: true }
+  },
+
+  // Subscribe to artifact change events
+  onArtifactChanged: (callback: (data: {
+    type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
+    path: string
+    relativePath: string
+    spaceId: string
+    item?: unknown
+  }) => void) => {
+    if (isElectron()) {
+      return window.halo.onArtifactChanged(callback)
+    }
+    // In remote mode, use WebSocket events
+    return onEvent('artifact:changed', callback)
+  },
+
   openArtifact: async (filePath: string): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.openArtifact(filePath)
@@ -471,6 +503,29 @@ export const api = {
     }
     // In remote mode, fetch content via API
     return httpRequest('GET', `/api/artifacts/content?path=${encodeURIComponent(filePath)}`)
+  },
+
+  // Save artifact content (CodeViewer edit mode)
+  saveArtifactContent: async (filePath: string, content: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.saveArtifactContent(filePath, content)
+    }
+    // In remote mode, save content via API
+    return httpRequest('POST', '/api/artifacts/save', { path: filePath, content })
+  },
+
+  detectFileType: async (filePath: string): Promise<ApiResponse<{
+    isText: boolean
+    canViewInCanvas: boolean
+    contentType: 'code' | 'markdown' | 'html' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'binary'
+    language?: string
+    mimeType: string
+  }>> => {
+    if (isElectron()) {
+      return window.halo.detectFileType(filePath)
+    }
+    // In remote mode, detect file type via API
+    return httpRequest('GET', `/api/artifacts/detect-type?path=${encodeURIComponent(filePath)}`)
   },
 
   // ===== Onboarding =====
@@ -568,20 +623,6 @@ export const api = {
     return window.halo.setAutoLaunch(enabled)
   },
 
-  getMinimizeToTray: async (): Promise<ApiResponse> => {
-    if (!isElectron()) {
-      return { success: false, error: 'Only available in desktop app' }
-    }
-    return window.halo.getMinimizeToTray()
-  },
-
-  setMinimizeToTray: async (enabled: boolean): Promise<ApiResponse> => {
-    if (!isElectron()) {
-      return { success: false, error: 'Only available in desktop app' }
-    }
-    return window.halo.setMinimizeToTray(enabled)
-  },
-
   // ===== Window (Electron only) =====
   setTitleBarOverlay: async (options: {
     color: string
@@ -641,6 +682,8 @@ export const api = {
     onEvent('agent:complete', callback),
   onAgentThought: (callback: (data: unknown) => void) =>
     onEvent('agent:thought', callback),
+  onAgentThoughtDelta: (callback: (data: unknown) => void) =>
+    onEvent('agent:thought-delta', callback),
   onAgentMcpStatus: (callback: (data: unknown) => void) =>
     onEvent('agent:mcp-status', callback),
   onAgentCompact: (callback: (data: unknown) => void) =>
@@ -1004,8 +1047,24 @@ export const api = {
     return window.halo.openExternal(url)
   },
 
-  // ===== Bootstrap Lifecycle Events (Electron only) =====
-  // Used to coordinate renderer initialization with main process service registration
+  // ===== Bootstrap Lifecycle (Electron only) =====
+  // Used to coordinate renderer initialization with main process service registration.
+  // Implements Pull+Push pattern for reliable initialization:
+  // - Pull: getBootstrapStatus() for immediate state query (handles HMR, error recovery)
+  // - Push: onBootstrapExtendedReady() for event-based notification (normal startup)
+
+  getBootstrapStatus: async (): Promise<{
+    extendedReady: boolean
+    extendedReadyAt: number
+  }> => {
+    if (!isElectron()) {
+      // In remote mode, services are always ready (server handles it)
+      return { extendedReady: true, extendedReadyAt: Date.now() }
+    }
+    const result = await window.halo.getBootstrapStatus()
+    return result.data ?? { extendedReady: false, extendedReadyAt: 0 }
+  },
+
   onBootstrapExtendedReady: (callback: (data: { timestamp: number; duration: number }) => void) => {
     if (!isElectron()) {
       // In remote mode, services are always ready (server handles it)

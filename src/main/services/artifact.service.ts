@@ -1,100 +1,28 @@
 /**
  * Artifact Service - Scans and manages files created by the agent
  * Provides real-time artifact discovery and file information
+ *
+ * PERFORMANCE OPTIMIZED:
+ * - Async functions for non-blocking I/O
+ * - Lazy loading support for tree view
+ * - Integration with artifact-cache.service for file watching
  */
 
-import { readdirSync, statSync, existsSync, readFileSync } from 'fs'
-import { join, extname, basename } from 'path'
+import { statSync, existsSync, realpathSync, readFileSync, writeFileSync, openSync, readSync, closeSync } from 'fs'
+import { join, extname, basename, sep } from 'path'
 import { getTempSpacePath } from './config.service'
 import { getSpace } from './space.service'
-
-// File type icon IDs mapping (mapped to Lucide icon names in renderer)
-const FILE_ICON_IDS: Record<string, string> = {
-  html: 'globe',
-  htm: 'globe',
-  css: 'palette',
-  scss: 'palette',
-  less: 'palette',
-  js: 'file-code',
-  jsx: 'file-code',
-  ts: 'file-code',
-  tsx: 'file-code',
-  json: 'file-json',
-  md: 'book',
-  markdown: 'book',
-  txt: 'file-text',
-  py: 'file-code',
-  rs: 'cpu',
-  go: 'file-code',
-  java: 'coffee',
-  cpp: 'cpu',
-  c: 'cpu',
-  h: 'cpu',
-  hpp: 'cpu',
-  vue: 'file-code',
-  svelte: 'file-code',
-  php: 'file-code',
-  rb: 'gem',
-  swift: 'file-code',
-  kt: 'file-code',
-  sql: 'database',
-  sh: 'terminal',
-  bash: 'terminal',
-  zsh: 'terminal',
-  yaml: 'file-json',
-  yml: 'file-json',
-  xml: 'file-json',
-  svg: 'image',
-  png: 'image',
-  jpg: 'image',
-  jpeg: 'image',
-  gif: 'image',
-  webp: 'image',
-  ico: 'image',
-  pdf: 'book',
-  doc: 'file-text',
-  docx: 'file-text',
-  xls: 'database',
-  xlsx: 'database',
-  ppt: 'file-text',
-  pptx: 'file-text',
-  zip: 'package',
-  tar: 'package',
-  gz: 'package',
-  rar: 'package',
-  default: 'file-text'
-}
-
-// Get icon ID for file extension
-function getFileIconId(ext: string): string {
-  const normalized = ext.toLowerCase().replace('.', '')
-  return FILE_ICON_IDS[normalized] || FILE_ICON_IDS.default
-}
-
-// Get readable file size
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
-}
-
-// Get file preview (first few lines for text files)
-function getFilePreview(filePath: string, ext: string): string | undefined {
-  const textExtensions = ['html', 'htm', 'css', 'js', 'jsx', 'ts', 'tsx', 'json', 'md', 'txt', 'py', 'rs', 'go', 'java', 'cpp', 'c', 'h', 'vue', 'svelte', 'php', 'rb', 'swift', 'kt', 'sql', 'sh', 'bash', 'yaml', 'yml', 'xml', 'svg']
-
-  if (!textExtensions.includes(ext.toLowerCase().replace('.', ''))) {
-    return undefined
-  }
-
-  try {
-    const content = readFileSync(filePath, 'utf-8')
-    const lines = content.split('\n').slice(0, 5)
-    return lines.join('\n').substring(0, 200)
-  } catch {
-    return undefined
-  }
-}
+import {
+  listArtifacts as listArtifactsCached,
+  listArtifactsTree as listArtifactsTreeCached,
+  loadDirectoryChildren,
+  initSpaceCache,
+  ensureSpaceCache,
+  onArtifactChange,
+  type CachedArtifact,
+  type CachedTreeNode,
+  type ArtifactChangeEvent
+} from './artifact-cache.service'
 
 export interface Artifact {
   id: string
@@ -121,76 +49,7 @@ export interface ArtifactTreeNode {
   size?: number
   children?: ArtifactTreeNode[]
   depth: number
-}
-
-// Recursively scan directory for artifacts
-function scanDirectory(
-  dirPath: string,
-  spaceId: string,
-  conversationId: string,
-  maxDepth: number = 3,
-  currentDepth: number = 0
-): Artifact[] {
-  const artifacts: Artifact[] = []
-
-  if (currentDepth >= maxDepth || !existsSync(dirPath)) {
-    return artifacts
-  }
-
-  try {
-    const entries = readdirSync(dirPath, { withFileTypes: true })
-
-    for (const entry of entries) {
-      // Skip hidden files and node_modules
-      if (entry.name.startsWith('.') || entry.name === 'node_modules') {
-        continue
-      }
-
-      const fullPath = join(dirPath, entry.name)
-
-      try {
-        const stats = statSync(fullPath)
-        const ext = extname(entry.name)
-
-        const artifact: Artifact = {
-          id: `artifact-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          spaceId,
-          conversationId,
-          name: entry.name,
-          type: entry.isDirectory() ? 'folder' : 'file',
-          path: fullPath,
-          extension: ext.replace('.', ''),
-          icon: entry.isDirectory() ? 'folder' : getFileIconId(ext),
-          createdAt: stats.birthtime.toISOString(),
-          size: entry.isFile() ? stats.size : undefined,
-          preview: entry.isFile() ? getFilePreview(fullPath, ext) : undefined
-        }
-
-        artifacts.push(artifact)
-
-        // Recursively scan directories
-        if (entry.isDirectory()) {
-          const subArtifacts = scanDirectory(
-            fullPath,
-            spaceId,
-            conversationId,
-            maxDepth,
-            currentDepth + 1
-          )
-          artifacts.push(...subArtifacts)
-        }
-      } catch (err) {
-        console.error(`[Artifact] Failed to stat ${fullPath}:`, err)
-      }
-    }
-  } catch (err) {
-    console.error(`[Artifact] Failed to read directory ${dirPath}:`, err)
-  }
-
-  // Sort by creation time (newest first)
-  return artifacts.sort((a, b) =>
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  )
+  childrenLoaded?: boolean  // For lazy loading - indicates if children have been fetched
 }
 
 // Get working directory for a space
@@ -208,21 +67,38 @@ function getWorkingDir(spaceId: string): string {
   return getTempSpacePath()
 }
 
-// List all artifacts in a space
-export function listArtifacts(spaceId: string): Artifact[] {
-  console.log(`[Artifact] Listing artifacts for space: ${spaceId}`)
+/**
+ * List all artifacts in a space
+ * Uses caching and file watching for optimal performance
+ */
+export async function listArtifacts(spaceId: string): Promise<Artifact[]> {
+  console.log(`[Artifact] listArtifacts for space: ${spaceId}`)
 
   const workDir = getWorkingDir(spaceId)
-  console.log(`[Artifact] Working directory: ${workDir}`)
 
   if (!existsSync(workDir)) {
     console.log(`[Artifact] Directory does not exist: ${workDir}`)
     return []
   }
 
-  const artifacts = scanDirectory(workDir, spaceId, 'all', 2)
-  console.log(`[Artifact] Found ${artifacts.length} artifacts`)
+  const cachedArtifacts = await listArtifactsCached(spaceId, workDir, 2)
 
+  // Convert to Artifact format
+  const artifacts: Artifact[] = cachedArtifacts.map(ca => ({
+    id: ca.id,
+    spaceId: ca.spaceId,
+    conversationId: 'all',
+    name: ca.name,
+    type: ca.type,
+    path: ca.path,
+    extension: ca.extension,
+    icon: ca.icon,
+    createdAt: ca.createdAt,
+    size: ca.size,
+    preview: undefined  // Don't load preview by default for performance
+  }))
+
+  console.log(`[Artifact] Found ${artifacts.length} artifacts`)
   return artifacts
 }
 
@@ -243,97 +119,112 @@ export function watchArtifacts(
   return () => {}
 }
 
-// Recursively scan directory and return tree structure
-function scanDirectoryTree(
-  dirPath: string,
-  maxDepth: number = 5,
-  currentDepth: number = 0
-): ArtifactTreeNode[] {
-  const nodes: ArtifactTreeNode[] = []
-
-  if (currentDepth >= maxDepth || !existsSync(dirPath)) {
-    return nodes
-  }
-
-  try {
-    const entries = readdirSync(dirPath, { withFileTypes: true })
-
-    // Sort: folders first, then files, alphabetically within each group
-    entries.sort((a, b) => {
-      if (a.isDirectory() && !b.isDirectory()) return -1
-      if (!a.isDirectory() && b.isDirectory()) return 1
-      return a.name.localeCompare(b.name)
-    })
-
-    for (const entry of entries) {
-      // Skip hidden files and common ignored directories
-      if (entry.name.startsWith('.') ||
-          entry.name === 'node_modules' ||
-          entry.name === '__pycache__' ||
-          entry.name === 'dist' ||
-          entry.name === 'build' ||
-          entry.name === '.git') {
-        continue
-      }
-
-      const fullPath = join(dirPath, entry.name)
-
-      try {
-        const stats = statSync(fullPath)
-        const ext = extname(entry.name)
-
-        const node: ArtifactTreeNode = {
-          id: `tree-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          name: entry.name,
-          type: entry.isDirectory() ? 'folder' : 'file',
-          path: fullPath,
-          extension: ext.replace('.', ''),
-          icon: entry.isDirectory() ? 'folder' : getFileIconId(ext),
-          size: entry.isFile() ? stats.size : undefined,
-          depth: currentDepth
-        }
-
-        // Recursively scan directories
-        if (entry.isDirectory()) {
-          const children = scanDirectoryTree(
-            fullPath,
-            maxDepth,
-            currentDepth + 1
-          )
-          if (children.length > 0) {
-            node.children = children
-          }
-        }
-
-        nodes.push(node)
-      } catch (err) {
-        console.error(`[Artifact] Failed to stat ${fullPath}:`, err)
-      }
-    }
-  } catch (err) {
-    console.error(`[Artifact] Failed to read directory ${dirPath}:`, err)
-  }
-
-  return nodes
-}
-
-// List artifacts as tree structure for developer view
-export function listArtifactsTree(spaceId: string): ArtifactTreeNode[] {
-  console.log(`[Artifact] Listing artifacts tree for space: ${spaceId}`)
+/**
+ * List artifacts as tree structure (lazy loading)
+ * Only loads root level initially, children are loaded on demand
+ */
+export async function listArtifactsTree(spaceId: string): Promise<ArtifactTreeNode[]> {
+  console.log(`[Artifact] listArtifactsTree for space: ${spaceId}`)
 
   const workDir = getWorkingDir(spaceId)
-  console.log(`[Artifact] Working directory: ${workDir}`)
 
   if (!existsSync(workDir)) {
     console.log(`[Artifact] Directory does not exist: ${workDir}`)
     return []
   }
 
-  const tree = scanDirectoryTree(workDir, 5, 0)
-  console.log(`[Artifact] Found ${tree.length} root nodes`)
+  const cachedNodes = await listArtifactsTreeCached(spaceId, workDir)
 
-  return tree
+  // Convert to ArtifactTreeNode format
+  const nodes: ArtifactTreeNode[] = cachedNodes.map(cn => convertToTreeNode(cn))
+
+  console.log(`[Artifact] Found ${nodes.length} root nodes`)
+  return nodes
 }
+
+/**
+ * Load children of a directory (lazy loading for tree view)
+ */
+export async function loadTreeChildren(
+  spaceId: string,
+  dirPath: string
+): Promise<ArtifactTreeNode[]> {
+  console.log(`[Artifact] loadTreeChildren for: ${dirPath}`)
+
+  const workDir = getWorkingDir(spaceId)
+
+  if (!existsSync(dirPath)) {
+    console.log(`[Artifact] Directory does not exist: ${dirPath}`)
+    return []
+  }
+
+  // Security: Validate path is within workspace to prevent path traversal
+  try {
+    const realPath = realpathSync(dirPath)
+    const realWorkDir = realpathSync(workDir)
+    // Must use sep suffix to prevent /workspace_tmp matching /workspace
+    const realWorkDirWithSep = realWorkDir.endsWith(sep) ? realWorkDir : realWorkDir + sep
+    if (realPath !== realWorkDir && !realPath.startsWith(realWorkDirWithSep)) {
+      console.warn(`[Artifact] Path traversal blocked: ${dirPath}`)
+      return []
+    }
+  } catch {
+    console.warn(`[Artifact] Failed to resolve path: ${dirPath}`)
+    return []
+  }
+
+  try {
+    const cachedNodes = await loadDirectoryChildren(spaceId, dirPath, workDir)
+    return cachedNodes.map(cn => convertToTreeNode(cn))
+  } catch (error) {
+    console.error(`[Artifact] loadTreeChildren error:`, error)
+    return []
+  }
+}
+
+/**
+ * Convert CachedTreeNode to ArtifactTreeNode
+ */
+function convertToTreeNode(cn: CachedTreeNode): ArtifactTreeNode {
+  return {
+    id: cn.id,
+    name: cn.name,
+    type: cn.type,
+    path: cn.path,
+    extension: cn.extension,
+    icon: cn.icon,
+    size: cn.size,
+    depth: cn.depth,
+    children: cn.children?.map(child => convertToTreeNode(child)),
+    childrenLoaded: cn.childrenLoaded
+  }
+}
+
+/**
+ * Initialize artifact watcher for a space
+ */
+export async function initArtifactWatcher(spaceId: string): Promise<void> {
+  const workDir = getWorkingDir(spaceId)
+
+  if (!existsSync(workDir)) {
+    console.log(`[Artifact] Cannot init watcher, directory does not exist: ${workDir}`)
+    return
+  }
+
+  await ensureSpaceCache(spaceId, workDir)
+}
+
+/**
+ * Subscribe to artifact change events
+ */
+export function subscribeToArtifactChanges(
+  callback: (event: ArtifactChangeEvent) => void
+): () => void {
+  return onArtifactChange(callback)
+}
+
+// Re-export types for external use
+export type { ArtifactChangeEvent }
 
 // ============================================
 // Content Canvas Support
@@ -496,5 +387,337 @@ export function getArtifactDownloadInfo(filePath: string): {
     }
   } catch {
     return null
+  }
+}
+
+// ============================================
+// File Type Detection (for Canvas viewability)
+// ============================================
+
+/**
+ * Content types for Canvas viewing
+ */
+export type CanvasContentType =
+  | 'code'
+  | 'markdown'
+  | 'html'
+  | 'image'
+  | 'pdf'
+  | 'text'
+  | 'json'
+  | 'csv'
+  | 'binary'
+
+/**
+ * File type detection result
+ */
+export interface FileTypeInfo {
+  isText: boolean           // Whether the file is text-based
+  canViewInCanvas: boolean  // Whether it can be viewed in Canvas
+  contentType: CanvasContentType
+  language?: string         // Programming language (for code files)
+  mimeType: string          // MIME type
+}
+
+// Known binary extensions (will NOT open in Canvas)
+const BINARY_EXTENSIONS = new Set([
+  // Executables & Libraries
+  'exe', 'dll', 'so', 'dylib', 'bin', 'app', 'msi', 'dmg', 'pkg',
+  // Archives
+  'zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar', 'tgz',
+  // Media (non-viewable)
+  'mp3', 'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'wav', 'flac', 'aac', 'ogg',
+  // Office documents (use external app)
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+  // Fonts
+  'ttf', 'otf', 'woff', 'woff2', 'eot',
+  // Database
+  'db', 'sqlite', 'sqlite3', 'mdb',
+  // Other binary
+  'class', 'pyc', 'pyo', 'o', 'obj', 'a', 'lib',
+  'iso', 'img', 'vmdk', 'vdi',
+])
+
+// Known image extensions (open in ImageViewer)
+const IMAGE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'tiff', 'tif',
+])
+
+// Known code extensions with their languages
+const CODE_EXTENSIONS: Record<string, string> = {
+  // JavaScript/TypeScript
+  js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript',
+  mjs: 'javascript', cjs: 'javascript',
+  // Web frameworks
+  vue: 'vue', svelte: 'svelte',
+  // Systems programming
+  py: 'python', rb: 'ruby', go: 'go', rs: 'rust',
+  java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
+  cs: 'csharp', swift: 'swift', kt: 'kotlin', kts: 'kotlin',
+  scala: 'scala', dart: 'dart', m: 'objectivec', mm: 'objectivec',
+  d: 'd', cr: 'crystal',
+  // Scripting
+  php: 'php', lua: 'lua', pl: 'perl', pm: 'perl',
+  r: 'r', R: 'r', rmd: 'r', hs: 'haskell', tcl: 'tcl',
+  // Shell
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  ps1: 'powershell', psm1: 'powershell', psd1: 'powershell',
+  // Config & Data
+  sql: 'sql', yaml: 'yaml', yml: 'yaml', xml: 'xml',
+  toml: 'toml', ini: 'ini', conf: 'ini', properties: 'properties',
+  proto: 'protobuf',
+  // Functional
+  clj: 'clojure', cljs: 'clojure', cljc: 'clojure', edn: 'clojure',
+  erl: 'erlang', hrl: 'erlang', ex: 'elixir', exs: 'elixir', elm: 'elm',
+  fs: 'fsharp', fsi: 'fsharp', fsx: 'fsharp',
+  ml: 'ocaml', mli: 'ocaml', sml: 'sml',
+  // Scientific
+  jl: 'julia', f: 'fortran', f90: 'fortran', f95: 'fortran', for: 'fortran',
+  // Legacy
+  pas: 'pascal', dpr: 'pascal', vb: 'vb', vbs: 'vbscript', bas: 'vb',
+  scm: 'scheme', rkt: 'scheme', lisp: 'lisp', lsp: 'lisp', cl: 'lisp',
+  // CSS & Templates
+  css: 'css', scss: 'scss', less: 'less', sass: 'sass', styl: 'stylus',
+  pug: 'pug', jade: 'pug', coffee: 'coffeescript', groovy: 'groovy',
+  // Hardware
+  v: 'verilog', sv: 'verilog', vhd: 'vhdl', vhdl: 'vhdl',
+  // DevOps
+  pp: 'puppet', nsh: 'nsis',
+  // Other
+  diff: 'diff', patch: 'diff', dockerfile: 'dockerfile',
+}
+
+// Special filenames (no extension) that are code
+const SPECIAL_FILENAMES: Record<string, string> = {
+  dockerfile: 'dockerfile',
+  makefile: 'makefile',
+  gemfile: 'ruby',
+  rakefile: 'ruby',
+  podfile: 'ruby',
+  vagrantfile: 'ruby',
+  jenkinsfile: 'groovy',
+  '.gitignore': 'gitignore',
+  '.dockerignore': 'gitignore',
+  '.editorconfig': 'ini',
+  '.env': 'shell',
+  '.env.local': 'shell',
+  '.env.development': 'shell',
+  '.env.production': 'shell',
+}
+
+/**
+ * Detect if file content is binary by checking for NULL bytes
+ * Reads first 8KB of file and checks for binary indicators
+ */
+function detectBinaryContent(filePath: string): boolean {
+  try {
+    const fd = openSync(filePath, 'r')
+    const buffer = Buffer.alloc(8192) // Read first 8KB
+    const bytesRead = readSync(fd, buffer, 0, 8192, 0)
+    closeSync(fd)
+
+    // Empty file is considered text
+    if (bytesRead === 0) {
+      return false
+    }
+
+    // Check for NULL bytes (strong indicator of binary)
+    for (let i = 0; i < bytesRead; i++) {
+      if (buffer[i] === 0) {
+        return true
+      }
+    }
+
+    // Check ratio of non-printable characters
+    let nonPrintable = 0
+    for (let i = 0; i < bytesRead; i++) {
+      const byte = buffer[i]
+      // Allow common text characters: printable ASCII, newline, tab, carriage return
+      if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) {
+        nonPrintable++
+      }
+      // Allow extended ASCII and UTF-8
+      // High bytes (> 127) are valid in UTF-8 sequences
+    }
+
+    // If more than 10% non-printable, likely binary
+    return nonPrintable / bytesRead > 0.1
+  } catch {
+    // If we can't read the file, assume binary to be safe
+    return true
+  }
+}
+
+/**
+ * Detect file type and viewability for Canvas
+ * Uses extension first (fast), falls back to content detection for unknown types
+ */
+export function detectFileType(filePath: string): FileTypeInfo {
+  if (!existsSync(filePath)) {
+    return {
+      isText: false,
+      canViewInCanvas: false,
+      contentType: 'binary',
+      mimeType: 'application/octet-stream',
+    }
+  }
+
+  const stats = statSync(filePath)
+  if (stats.isDirectory()) {
+    return {
+      isText: false,
+      canViewInCanvas: false,
+      contentType: 'binary',
+      mimeType: 'inode/directory',
+    }
+  }
+
+  const ext = extname(filePath).toLowerCase().replace('.', '')
+  const filename = basename(filePath).toLowerCase()
+
+  // Check special filenames first
+  if (SPECIAL_FILENAMES[filename]) {
+    return {
+      isText: true,
+      canViewInCanvas: true,
+      contentType: 'code',
+      language: SPECIAL_FILENAMES[filename],
+      mimeType: 'text/plain',
+    }
+  }
+
+  // Known binary extensions → cannot view
+  if (BINARY_EXTENSIONS.has(ext)) {
+    return {
+      isText: false,
+      canViewInCanvas: false,
+      contentType: 'binary',
+      mimeType: 'application/octet-stream',
+    }
+  }
+
+  // Known image extensions → ImageViewer
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    return {
+      isText: false,
+      canViewInCanvas: true,
+      contentType: 'image',
+      mimeType: getMimeType(ext),
+    }
+  }
+
+  // PDF → BrowserView
+  if (ext === 'pdf') {
+    return {
+      isText: false,
+      canViewInCanvas: true,
+      contentType: 'pdf',
+      mimeType: 'application/pdf',
+    }
+  }
+
+  // Known code extensions → CodeViewer
+  if (CODE_EXTENSIONS[ext]) {
+    return {
+      isText: true,
+      canViewInCanvas: true,
+      contentType: 'code',
+      language: CODE_EXTENSIONS[ext],
+      mimeType: getMimeType(ext),
+    }
+  }
+
+  // Markdown
+  if (ext === 'md' || ext === 'markdown') {
+    return {
+      isText: true,
+      canViewInCanvas: true,
+      contentType: 'markdown',
+      language: 'markdown',
+      mimeType: 'text/markdown',
+    }
+  }
+
+  // HTML
+  if (ext === 'html' || ext === 'htm') {
+    return {
+      isText: true,
+      canViewInCanvas: true,
+      contentType: 'html',
+      language: 'html',
+      mimeType: 'text/html',
+    }
+  }
+
+  // JSON
+  if (ext === 'json' || ext === 'lock') {
+    return {
+      isText: true,
+      canViewInCanvas: true,
+      contentType: 'json',
+      language: 'json',
+      mimeType: 'application/json',
+    }
+  }
+
+  // CSV
+  if (ext === 'csv') {
+    return {
+      isText: true,
+      canViewInCanvas: true,
+      contentType: 'csv',
+      mimeType: 'text/csv',
+    }
+  }
+
+  // Known text extensions without syntax highlighting
+  const textExtensions = ['txt', 'log', 'env', 'gitignore', 'dockerignore']
+  if (textExtensions.includes(ext)) {
+    return {
+      isText: true,
+      canViewInCanvas: true,
+      contentType: 'text',
+      mimeType: 'text/plain',
+    }
+  }
+
+  // Unknown extension → detect by content
+  const isBinary = detectBinaryContent(filePath)
+
+  if (isBinary) {
+    return {
+      isText: false,
+      canViewInCanvas: false,
+      contentType: 'binary',
+      mimeType: 'application/octet-stream',
+    }
+  }
+
+  // Unknown but appears to be text → open as plain text (editable)
+  return {
+    isText: true,
+    canViewInCanvas: true,
+    contentType: 'text',
+    mimeType: 'text/plain',
+  }
+}
+
+/**
+ * Save content to a file
+ * Used by CodeViewer edit mode
+ */
+export function saveArtifactContent(filePath: string, content: string): void {
+  console.log(`[Artifact] Saving content to: ${filePath}`)
+
+  if (!filePath) {
+    throw new Error('File path is required')
+  }
+
+  try {
+    writeFileSync(filePath, content, 'utf-8')
+    console.log(`[Artifact] File saved successfully: ${filePath}`)
+  } catch (error) {
+    console.error(`[Artifact] Failed to save file: ${filePath}`, error)
+    throw new Error(`Failed to save file: ${(error as Error).message}`)
   }
 }

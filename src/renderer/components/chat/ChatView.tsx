@@ -362,35 +362,18 @@ function EmptyState({ isTemp, isCompact = false }: { isTemp: boolean; isCompact?
       {/* Icon */}
       <Sparkles className="w-12 h-12 text-primary" />
 
-      {/* Title */}
+      {/* Title - concise and warm */}
       <h2 className="mt-6 text-xl font-medium">
-        {t('Halo, not just chat, can help you get things done')}
+        Halo
       </h2>
-
-      {/* Capabilities */}
-      <div className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-        <span>{t('Programming Development')}</span>
-        <span className="text-muted-foreground/30">·</span>
-        <span>{t('File Processing')}</span>
-        <span className="text-muted-foreground/30">·</span>
-        <span>{t('Information Retrieval')}</span>
-        <span className="text-muted-foreground/30">·</span>
-        <span>{t('Data Analysis')}</span>
-        <span className="text-muted-foreground/30">·</span>
-        <span>{t('Content Creation')}</span>
-        <span className="text-muted-foreground/30">·</span>
-        <span>{t('Task Automation')}</span>
-      </div>
-
-      {/* Permission hint */}
-      <p className="mt-6 text-xs text-muted-foreground/50">
-        {t('Halo has full access to the current space')}
+      <p className="mt-2 text-muted-foreground">
+        {t('Not just chat, help you get things done')}
       </p>
 
-      {/* Powered by badge */}
-      <div className="mt-3 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20">
-        <span className="text-xs text-primary">
-          {t('Powered by Claude Code with full Agent capabilities')}
+      {/* Powered by badge - simplified */}
+      <div className="mt-8 px-3 py-1.5 rounded-full border border-border">
+        <span className="text-xs text-muted-foreground">
+          Powered by Claude Code
         </span>
       </div>
     </div>

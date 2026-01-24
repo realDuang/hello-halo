@@ -27,6 +27,7 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 import { FileChangesFooter } from '../diff'
 import { MessageImages } from './ImageAttachmentPreview'
 import { TokenUsageIndicator } from './TokenUsageIndicator'
+import { truncateText, getToolFriendlyFormat } from './thought-utils'
 import type { Message, Thought } from '../../types'
 import { useTranslation } from '../../i18n'
 
@@ -82,10 +83,27 @@ function ThoughtHistory({ thoughts }: { thoughts: Thought[] }) {
   )
 }
 
+
+// Format tool result output for display
+function formatResultOutput(output: string, maxLen = 300) {
+  if (!output) return ''
+  try {
+    const parsed = JSON.parse(output)
+    const formatted = JSON.stringify(parsed, null, 2)
+    return formatted.length > maxLen ? formatted.substring(0, maxLen) + '...' : formatted
+  } catch {
+    return output.length > maxLen ? output.substring(0, maxLen) + '...' : output
+  }
+}
+
 // Single thought item
 function ThoughtItem({ thought }: { thought: Thought }) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const [showResult, setShowResult] = useState(true)  // Default show result
   const { t } = useTranslation()
+
+  // Check if tool has result (merged tool_result)
+  const hasToolResult = thought.type === 'tool_use' && thought.toolResult
 
   const getTypeInfo = () => {
     switch (thought.type) {
@@ -113,8 +131,9 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   }
 
   const info = getTypeInfo()
+  // Use friendly format for tool_use
   const content = thought.type === 'tool_use'
-    ? JSON.stringify(thought.toolInput, null, 2)
+    ? getToolFriendlyFormat(thought.toolName || '', thought.toolInput)
     : thought.type === 'tool_result'
       ? thought.toolOutput
       : thought.content
@@ -139,6 +158,28 @@ function ThoughtItem({ thought }: { thought: Thought }) {
               >
                 {isExpanded ? t('Collapse') : t('Expand')}
               </button>
+            )}
+          </div>
+        )}
+        {/* Show/Hide result button for tool_use with result */}
+        {hasToolResult && thought.toolResult!.output && (
+          <div className="mt-1">
+            <button
+              onClick={() => setShowResult(!showResult)}
+              className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            >
+              {showResult ? t('Hide result') : t('Show result')}
+            </button>
+            {showResult && (
+              <div className={`mt-1 p-1.5 rounded text-[10px] overflow-x-auto ${
+                thought.toolResult!.isError
+                  ? 'bg-destructive/10 text-destructive'
+                  : 'bg-muted/30 text-muted-foreground'
+              }`}>
+                <pre className="whitespace-pre-wrap break-words">
+                  {formatResultOutput(thought.toolResult!.output, isExpanded ? 10000 : 300)}
+                </pre>
+              </div>
             )}
           </div>
         )}
