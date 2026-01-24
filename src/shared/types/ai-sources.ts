@@ -112,6 +112,11 @@ export interface CustomSourceConfig extends AISourceBaseConfig {
   provider: ApiProvider
   apiKey: string
   apiUrl: string
+  // Optional fields for multiple custom sources
+  id?: string
+  name?: string
+  type?: 'custom'
+  availableModels?: string[]
 }
 
 /**

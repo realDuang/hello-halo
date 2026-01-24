@@ -498,5 +498,7 @@
   "Zoom in": "放大",
   "Zoom in (+)": "放大 (+)",
   "Zoom out": "缩小",
-  "Zoom out (-)": "缩小 (-)"
+  "Zoom out (-)": "缩小 (-)",
+  "Connect to OpenAI, Local LLMs, etc.": "连接到 OpenAI, 本地大模型等",
+  "menu bar": "菜单栏"
 }

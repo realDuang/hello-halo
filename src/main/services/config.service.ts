@@ -208,6 +208,7 @@ function normalizeAiSources(parsed: Record<string, any>): AISourcesConfig {
   if (aiSources.custom) {
     const provider = aiSources.custom.provider === 'openai' ? 'openai' : 'anthropic'
     aiSources.custom = {
+      ...aiSources.custom,
       provider,
       apiKey: aiSources.custom.apiKey || '',
       apiUrl: aiSources.custom.apiUrl || (provider === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'),
