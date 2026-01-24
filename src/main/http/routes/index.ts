@@ -4,7 +4,7 @@
  */
 
 import { Express, Request, Response } from 'express'
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, app as electronApp } from 'electron'
 import { createReadStream, statSync, existsSync, readdirSync, realpathSync } from 'fs'
 import { join, basename, relative, resolve, isAbsolute } from 'path'
 import { createGzip } from 'zlib'
@@ -14,6 +14,7 @@ import * as agentController from '../../controllers/agent.controller'
 import * as spaceController from '../../controllers/space.controller'
 import * as conversationController from '../../controllers/conversation.controller'
 import * as configController from '../../controllers/config.controller'
+import { getEnabledAuthProviderConfigs } from '../../services/ai-sources'
 import {
   listArtifacts,
   listArtifactsTree,
@@ -130,6 +131,17 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
     const { apiKey, apiUrl, provider } = req.body
     const result = await configController.validateApi(apiKey, apiUrl, provider)
     res.json(result)
+  })
+
+  // ===== Auth Routes (Read-only for remote access) =====
+  // Remote clients use host machine's auth state, no login operations needed
+  app.get('/api/auth/providers', async (req: Request, res: Response) => {
+    try {
+      const providers = getEnabledAuthProviderConfigs()
+      res.json({ success: true, data: providers })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
   })
 
   // ===== Space Routes =====
@@ -503,6 +515,16 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
       res.json({ success: true, data: info })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ===== System Routes =====
+  app.get('/api/system/version', async (req: Request, res: Response) => {
+    try {
+      const version = electronApp.getVersion()
+      res.json({ success: true, data: version })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
     }
   })
 

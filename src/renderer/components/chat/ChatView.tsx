@@ -154,14 +154,16 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const session = getCurrentSession()
   const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, textBlockVersion } = session
 
+  // Scrollable container ref
+  const containerRef = useRef<HTMLDivElement>(null)
+
   // Smart auto-scroll: only scrolls when user is at bottom
   const {
-    containerRef,
-    bottomRef,
     showScrollButton,
     scrollToBottom,
     handleScroll
   } = useSmartScroll({
+    containerRef,
     threshold: 100,
     deps: [currentConversation?.messages, streamingContent, thoughts, mockStreamingContent]
   })
@@ -294,21 +296,18 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
           ) : !hasMessages ? (
             <EmptyState isTemp={currentSpace?.isTemp || false} isCompact={isCompact} />
           ) : (
-            <>
-              <MessageList
-                messages={displayMessages}
-                streamingContent={displayStreamingContent}
-                isGenerating={displayIsGenerating}
-                isStreaming={displayIsStreaming}
-                thoughts={thoughts}
-                isThinking={displayIsThinking}
-                compactInfo={compactInfo}
-                error={error}
-                isCompact={isCompact}
-                textBlockVersion={textBlockVersion}
-              />
-              <div ref={bottomRef} />
-            </>
+            <MessageList
+              messages={displayMessages}
+              streamingContent={displayStreamingContent}
+              isGenerating={displayIsGenerating}
+              isStreaming={displayIsStreaming}
+              thoughts={thoughts}
+              isThinking={displayIsThinking}
+              compactInfo={compactInfo}
+              error={error}
+              isCompact={isCompact}
+              textBlockVersion={textBlockVersion}
+            />
           )}
         </div>
 

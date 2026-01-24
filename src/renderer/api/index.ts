@@ -899,10 +899,12 @@ export const api = {
   },
 
   getVersion: async (): Promise<ApiResponse<string>> => {
-    if (!isElectron()) {
-      return { success: false, error: 'Only available in desktop app' }
+    if (isElectron()) {
+      const version = await window.halo.getVersion()
+      return { success: true, data: version }
     }
-    return window.halo.getVersion()
+    // Remote mode: get version from server
+    return httpRequest('GET', '/api/system/version')
   },
 
   onUpdaterStatus: (callback: (data: {

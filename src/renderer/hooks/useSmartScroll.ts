@@ -8,9 +8,11 @@
  * - Resumes auto-scroll when user returns to bottom
  */
 
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 
 interface UseSmartScrollOptions {
+  /** Scrollable container ref (required) */
+  containerRef: React.RefObject<HTMLDivElement>
   /** Threshold in pixels to consider "at bottom" (default: 100) */
   threshold?: number
   /** Dependencies that trigger scroll check (e.g., messages, streaming content) */
@@ -18,10 +20,6 @@ interface UseSmartScrollOptions {
 }
 
 interface UseSmartScrollReturn {
-  /** Ref to attach to the scrollable container */
-  containerRef: React.RefObject<HTMLDivElement>
-  /** Ref to attach to the bottom anchor element */
-  bottomRef: React.RefObject<HTMLDivElement>
   /** Whether to show the "scroll to bottom" button */
   showScrollButton: boolean
   /** Programmatically scroll to bottom */
@@ -30,11 +28,8 @@ interface UseSmartScrollReturn {
   handleScroll: () => void
 }
 
-export function useSmartScroll(options: UseSmartScrollOptions = {}): UseSmartScrollReturn {
-  const { threshold = 100, deps = [] } = options
-
-  const containerRef = useRef<HTMLDivElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
+export function useSmartScroll(options: UseSmartScrollOptions): UseSmartScrollReturn {
+  const { containerRef, threshold = 100, deps = [] } = options
 
   // Track if user has scrolled away from bottom
   const [isAtBottom, setIsAtBottom] = useState(true)
@@ -56,7 +51,7 @@ export function useSmartScroll(options: UseSmartScrollOptions = {}): UseSmartScr
     const { scrollTop, scrollHeight, clientHeight } = container
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight
     return distanceFromBottom <= threshold
-  }, [threshold])
+  }, [containerRef, threshold])
 
   /**
    * Handle scroll events - detect user scroll vs programmatic scroll
@@ -90,22 +85,25 @@ export function useSmartScroll(options: UseSmartScrollOptions = {}): UseSmartScr
     }
 
     lastScrollTop.current = scrollTop
-  }, [checkIsAtBottom])
+  }, [containerRef, checkIsAtBottom])
 
   /**
    * Programmatically scroll to bottom
    */
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    const bottom = bottomRef.current
-    if (!bottom) return
+    const container = containerRef.current
+    if (!container) return
 
     isProgrammaticScroll.current = true
-    bottom.scrollIntoView({ behavior, block: 'end' })
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior
+    })
 
     // Update state after scroll
     setIsAtBottom(true)
     setShowScrollButton(false)
-  }, [])
+  }, [containerRef])
 
   /**
    * Auto-scroll when dependencies change, but only if user is at bottom
@@ -119,8 +117,6 @@ export function useSmartScroll(options: UseSmartScrollOptions = {}): UseSmartScr
   }, deps)
 
   return {
-    containerRef,
-    bottomRef,
     showScrollButton,
     scrollToBottom,
     handleScroll

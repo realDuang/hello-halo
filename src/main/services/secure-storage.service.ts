@@ -1,12 +1,25 @@
 /**
  * Secure Storage Service
  *
- * Uses Electron's safeStorage API to encrypt sensitive data like tokens.
- * - macOS: Uses Keychain
- * - Windows: Uses DPAPI
- * - Linux: Uses libsecret
+ * DEPRECATED for new data - kept only for backward compatibility.
  *
- * Falls back to plaintext if encryption is not available.
+ * Previously used Electron's safeStorage API to encrypt API keys and tokens.
+ * This caused macOS users to see Keychain permission prompts on first launch,
+ * which was confusing and hurt the user experience.
+ *
+ * Current behavior:
+ * - encryptString(): No longer used (removed from callers)
+ * - decryptString(): Still used to READ old encrypted values (enc: prefix)
+ *
+ * Migration strategy:
+ * - Old encrypted values are decrypted on read
+ * - New values are stored as plaintext
+ * - Next save automatically migrates to plaintext
+ *
+ * Platform behavior (for reference):
+ * - macOS: Uses Keychain (prompts user!)
+ * - Windows: Uses DPAPI (silent)
+ * - Linux: Uses libsecret
  */
 
 import { safeStorage } from 'electron'
@@ -16,6 +29,7 @@ const ENCRYPTED_PREFIX = 'enc:'
 
 /**
  * Check if encryption is available on this platform
+ * @deprecated No longer used - kept for backward compatibility
  */
 export function isEncryptionAvailable(): boolean {
   return safeStorage.isEncryptionAvailable()
@@ -23,6 +37,7 @@ export function isEncryptionAvailable(): boolean {
 
 /**
  * Encrypt a string value
+ * @deprecated Do not use - causes Keychain prompts on macOS
  * Returns encrypted base64 string with prefix, or original value if encryption unavailable
  */
 export function encryptString(value: string): string {
@@ -72,6 +87,7 @@ export function decryptString(value: string): string {
 
 /**
  * Encrypt token fields in an object
+ * @deprecated Do not use - causes Keychain prompts on macOS
  * Encrypts: accessToken, refreshToken
  */
 export function encryptTokens<T extends Record<string, any>>(obj: T): T {

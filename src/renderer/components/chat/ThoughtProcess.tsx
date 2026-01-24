@@ -24,6 +24,7 @@ import {
   getThoughtLabelKey,
   getToolFriendlyFormat,
 } from './thought-utils'
+import { useSmartScroll } from '../../hooks/useSmartScroll'
 import type { Thought } from '../../types'
 import { useTranslation } from '../../i18n'
 
@@ -157,8 +158,8 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
 
   if (thought.type === 'tool_use') {
     if (!isToolReady) {
-      // Tool still streaming - show generating message
-      displayContent = t('Generating...')
+      // Tool still streaming - status shown in header, content shows placeholder
+      displayContent = '...'
     } else {
       // Tool ready - show friendly format
       displayContent = getToolFriendlyFormat(thought.toolName || '', thought.toolInput)
@@ -282,7 +283,6 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
                   title={showRawJson ? t('Hide raw JSON') : t('Show raw JSON')}
                 >
                   <Braces size={10} />
-                  JSON
                 </button>
               )}
 
@@ -379,12 +379,13 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
     })
   }, [thoughts])
 
-  // Auto-scroll to bottom when new thoughts arrive
-  useEffect(() => {
-    if (isExpanded && contentRef.current) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight
-    }
-  }, [thoughts, isExpanded])
+  // Smart auto-scroll: only scrolls when user is at bottom
+  // Stops auto-scroll when user scrolls up to read history
+  const { handleScroll } = useSmartScroll({
+    containerRef: contentRef,
+    threshold: 50,
+    deps: [thoughts, isExpanded]
+  })
 
   // Don't render if no thoughts and not thinking
   if (thoughts.length === 0 && !isThinking) {
@@ -458,7 +459,8 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
             {hasDisplayContent && (
               <div
                 ref={contentRef}
-                className={`px-4 pt-3 ${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} scrollbar-overlay transition-all duration-200`}
+                onScroll={handleScroll}
+                className={`px-4 pt-3 ${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} overflow-auto scrollbar-overlay transition-all duration-200`}
               >
                 {displayThoughts.map((thought, index) => (
                   <ThoughtItem

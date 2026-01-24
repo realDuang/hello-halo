@@ -287,7 +287,8 @@ export async function ensureSessionWarm(
       append: buildSystemPromptAppend(workDir, credentials.model)
     },
     maxTurns: 50,
-    allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
+    allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'Skill'],
+    settingSources: ['user', 'project'],  // Enable Skills loading from ~/.claude/skills/ and <workspace>/.claude/skills/
     permissionMode: 'acceptEdits' as const,
     canUseTool: createCanUseTool(workDir, spaceId, conversationId),  // Consistent with sendMessage
     includePartialMessages: true,

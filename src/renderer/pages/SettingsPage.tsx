@@ -124,6 +124,18 @@ export function SettingsPage() {
   // API Key visibility state
   const [showApiKey, setShowApiKey] = useState(false)
 
+  // App version state
+  const [appVersion, setAppVersion] = useState<string>('')
+
+  // Load app version
+  useEffect(() => {
+    api.getVersion().then((result) => {
+      if (result.success && result.data) {
+        setAppVersion(result.data)
+      }
+    })
+  }, [])
+
   // Load remote access status
   useEffect(() => {
     loadRemoteStatus()
@@ -219,7 +231,7 @@ export function SettingsPage() {
   }
 
   const loadQRCode = async () => {
-    const response = await api.getRemoteQRCode(true) // Include token
+    const response = await api.getRemoteQRCode(false) // URL only, no token
     if (response.success && response.data) {
       setQrCode((response.data as any).qrCode)
     }
@@ -925,7 +937,7 @@ export function SettingsPage() {
 
             {/* Info banner */}
             <div className="bg-muted/50 rounded-lg p-3 mb-4 text-sm text-muted-foreground">
-              {t('Current version defaults to full permission mode, AI can freely perform all operations. Future versions will support fine-grained permission control.')}
+              {t('We recommend full trust mode - use natural language to control Halo. UI-based permission settings coming in future versions.')}
             </div>
 
             <div className="space-y-4 opacity-50">
@@ -1091,7 +1103,8 @@ export function SettingsPage() {
             </div>
           </section>
 
-          {/* Remote Access Section */}
+          {/* Remote Access Section - Only show in desktop app (not in remote mode) */}
+          {!api.isRemoteMode() && (
           <section className="bg-card rounded-xl border border-border p-6">
             <h2 className="text-lg font-medium mb-4">{t('Remote Access')}</h2>
 
@@ -1334,10 +1347,7 @@ export function SettingsPage() {
                         </div>
                         <div className="text-center text-sm">
                           <p className="text-muted-foreground">
-                            {t('Scan the QR code with your phone and enter the password to access')}
-                          </p>
-                          <p className="text-amber-500 text-xs mt-1">
-                            {t('QR code contains password, do not share screenshots with others')}
+                            {t('Scan the QR code with your phone to access')}
                           </p>
                         </div>
                       </div>
@@ -1347,6 +1357,7 @@ export function SettingsPage() {
               )}
             </div>
           </section>
+          )}
 
           {/* About Section */}
           <section className="bg-card rounded-xl border border-border p-6">
@@ -1355,7 +1366,7 @@ export function SettingsPage() {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('Version')}</span>
-                <span>1.0.0</span>
+                <span>{appVersion || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('Build')}</span>

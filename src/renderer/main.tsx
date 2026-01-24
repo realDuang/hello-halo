@@ -2,7 +2,6 @@
  * Halo - React Entry Point
  */
 
-import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 
@@ -14,6 +13,5 @@ import './assets/styles/globals.css'       // Theme, base styles, shared animati
 import './assets/styles/syntax-theme.css'  // Code syntax highlighting (highlight.js)
 import './assets/styles/canvas-tabs.css'   // VS Code style tab bar
 import './assets/styles/browser-task-card.css' // AI Browser sci-fi effects
-
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<App />)

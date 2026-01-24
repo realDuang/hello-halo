@@ -191,7 +191,8 @@ export async function sendMessage(
         append: buildSystemPromptAppend(workDir, credentials.model) + (aiBrowserEnabled ? AI_BROWSER_SYSTEM_PROMPT : '')
       },
       maxTurns: 50,
-      allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
+      allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'Skill'],
+      settingSources: ['user', 'project'],  // Enable Skills loading from ~/.claude/skills/ and <workspace>/.claude/skills/
       permissionMode: 'acceptEdits' as const,
       canUseTool: createCanUseTool(workDir, spaceId, conversationId),
       includePartialMessages: true,  // Requires SDK patch: enable token-level streaming (stream_event)

@@ -32,7 +32,7 @@ import { getConfig, saveConfig } from '../config.service'
 import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { loadAuthProvidersAsync, isOAuthProvider as isOAuthProviderCheck, type LoadedProvider } from './auth-loader'
-import { encryptString, decryptString, decryptTokens } from '../secure-storage.service'
+import { decryptString, decryptTokens } from '../secure-storage.service'
 
 /**
  * Extended OAuth provider interface for token management
@@ -254,7 +254,9 @@ class AISourceManager {
     const modelNames = data._modelNames || {}
     const defaultModel = data._defaultModel || ''
 
-    // Generic OAuth config structure (with encrypted tokens)
+    // Generic OAuth config structure
+    // NOTE: Tokens stored as plaintext to avoid macOS Keychain prompts
+    // Old encrypted tokens (enc: prefix) are still readable for backward compatibility
     const oauthConfig: OAuthSourceConfig = {
       loggedIn: true,
       user: {
@@ -264,9 +266,8 @@ class AISourceManager {
       model: defaultModel,
       availableModels,
       modelNames,  // Store model display names mapping
-      // Encrypt tokens before storing
-      accessToken: encryptString(tokenData?.accessToken || ''),
-      refreshToken: encryptString(tokenData?.refreshToken || ''),
+      accessToken: tokenData?.accessToken || '',
+      refreshToken: tokenData?.refreshToken || '',
       tokenExpires: tokenData?.expiresAt
     }
 
@@ -355,17 +356,18 @@ class AISourceManager {
       const refreshResult = await provider.refreshTokenWithConfig(aiSources)
 
       if (refreshResult.success && refreshResult.data) {
-        // Get fresh config from disk (with encrypted tokens) and update only the refreshed provider
+        // Get fresh config from disk and update only the refreshed provider
         const freshConfig = getConfig() as any
         const freshAiSources: AISourcesConfig = freshConfig.aiSources || { current: 'custom' }
         const providerConfig = freshAiSources[type] as any
         if (providerConfig) {
-          providerConfig.accessToken = encryptString(refreshResult.data.accessToken)
-          providerConfig.refreshToken = encryptString(refreshResult.data.refreshToken)
+          // Store tokens as plaintext (no encryption to avoid Keychain prompts)
+          providerConfig.accessToken = refreshResult.data.accessToken
+          providerConfig.refreshToken = refreshResult.data.refreshToken
           providerConfig.tokenExpires = refreshResult.data.expiresAt
 
           saveConfig({ aiSources: freshAiSources } as any)
-          console.log('[AISourceManager] Token refreshed and saved (encrypted)')
+          console.log('[AISourceManager] Token refreshed and saved')
         }
       } else {
         console.error(`[AISourceManager] Token refresh failed for ${type}:`, refreshResult.error)

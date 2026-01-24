@@ -5,7 +5,7 @@
 import { ipcMain } from 'electron'
 import { getConfig, saveConfig, validateApiConnection } from '../services/config.service'
 import { getAISourceManager } from '../services/ai-sources'
-import { encryptString, decryptString } from '../services/secure-storage.service'
+import { decryptString } from '../services/secure-storage.service'
 
 export function registerConfigHandlers(): void {
   // Get configuration
@@ -42,7 +42,9 @@ export function registerConfigHandlers(): void {
   // Save configuration
   ipcMain.handle('config:set', async (_event, updates: Record<string, unknown>) => {
     try {
-      // Encrypt custom API key if present
+      // NOTE: API keys are now stored in plaintext (no encryption)
+      // This avoids macOS Keychain prompts that confused users
+      // Backward compatibility: encrypted keys (enc: prefix) are still readable
       const processedUpdates = { ...updates }
       const incomingAiSources = processedUpdates.aiSources as Record<string, any> | undefined
       if (incomingAiSources && typeof incomingAiSources === 'object') {
@@ -69,20 +71,8 @@ export function registerConfigHandlers(): void {
         processedUpdates.aiSources = mergedAiSources
       }
 
-      const aiSources = processedUpdates.aiSources as Record<string, any> | undefined
-      if (aiSources?.custom?.apiKey && typeof aiSources.custom.apiKey === 'string') {
-        // Only encrypt if not already encrypted
-        if (!aiSources.custom.apiKey.startsWith('enc:')) {
-          aiSources.custom.apiKey = encryptString(aiSources.custom.apiKey)
-        }
-      }
-      // Also handle legacy api.apiKey
-      const api = processedUpdates.api as Record<string, any> | undefined
-      if (api?.apiKey && typeof api.apiKey === 'string') {
-        if (!api.apiKey.startsWith('enc:')) {
-          api.apiKey = encryptString(api.apiKey)
-        }
-      }
+      // No longer encrypting API keys - store as plaintext
+      // Old encrypted values will be decrypted on read and saved as plaintext on next write
 
       const config = saveConfig(processedUpdates)
       return { success: true, data: config }
