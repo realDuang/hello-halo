@@ -181,37 +181,29 @@ const DEFAULT_CONFIG: HaloConfig = {
 
 function normalizeAiSources(parsed: Record<string, any>): AISourcesConfig {
   const raw = parsed?.aiSources
-  const aiSources: AISourcesConfig = {
-    ...(raw && typeof raw === 'object' ? raw : {})
+
+  // If aiSources already exists, use it directly (no auto-rebuild from legacy api)
+  if (raw && typeof raw === 'object') {
+    const aiSources: AISourcesConfig = { ...raw }
+    if (!aiSources.current) {
+      aiSources.current = 'custom'
+    }
+    return aiSources
   }
 
-  if (!aiSources.current) {
-    aiSources.current = 'custom'
-  }
-
+  // First-time migration only: create aiSources from legacy api config
+  const aiSources: AISourcesConfig = { current: 'custom' }
   const legacyApi = parsed?.api
-  const hasLegacyApi =
-    typeof legacyApi?.apiKey === 'string' && legacyApi.apiKey.length > 0
+  const hasLegacyApi = typeof legacyApi?.apiKey === 'string' && legacyApi.apiKey.length > 0
 
-  if (!aiSources.custom && hasLegacyApi) {
+  if (hasLegacyApi) {
     const provider = legacyApi?.provider === 'openai' ? 'openai' : 'anthropic'
     aiSources.custom = {
       provider,
-      apiKey: legacyApi?.apiKey || '',
+      apiKey: legacyApi.apiKey,
       apiUrl: legacyApi?.apiUrl || (provider === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'),
       model: legacyApi?.model || DEFAULT_MODEL
     } as CustomSourceConfig
-  }
-
-  if (aiSources.custom) {
-    const provider = aiSources.custom.provider === 'openai' ? 'openai' : 'anthropic'
-    aiSources.custom = {
-      ...aiSources.custom,
-      provider,
-      apiKey: aiSources.custom.apiKey || '',
-      apiUrl: aiSources.custom.apiUrl || (provider === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'),
-      model: aiSources.custom.model || DEFAULT_MODEL
-    }
   }
 
   return aiSources

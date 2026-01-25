@@ -42,37 +42,31 @@ export function registerConfigHandlers(): void {
   // Save configuration
   ipcMain.handle('config:set', async (_event, updates: Record<string, unknown>) => {
     try {
-      // NOTE: API keys are now stored in plaintext (no encryption)
-      // This avoids macOS Keychain prompts that confused users
-      // Backward compatibility: encrypted keys (enc: prefix) are still readable
       const processedUpdates = { ...updates }
       const incomingAiSources = processedUpdates.aiSources as Record<string, any> | undefined
+
       if (incomingAiSources && typeof incomingAiSources === 'object') {
         const currentConfig = getConfig() as Record<string, any>
         const currentAiSources = currentConfig.aiSources || { current: 'custom' }
-        const mergedAiSources: Record<string, any> = {
-          ...currentAiSources,
-          ...incomingAiSources
-        }
 
+        // Start with incoming sources (this is the source of truth from frontend)
+        const mergedAiSources: Record<string, any> = { ...incomingAiSources }
+
+        // Deep merge: preserve nested fields for existing sources
         for (const key of Object.keys(incomingAiSources)) {
           if (key === 'current') continue
           const incomingValue = incomingAiSources[key]
           const currentValue = currentAiSources[key]
-          if (incomingValue && typeof incomingValue === 'object' && !Array.isArray(incomingValue)
-            && currentValue && typeof currentValue === 'object' && !Array.isArray(currentValue)) {
-            mergedAiSources[key] = {
-              ...currentValue,
-              ...incomingValue
-            }
+          if (
+            incomingValue && typeof incomingValue === 'object' && !Array.isArray(incomingValue) &&
+            currentValue && typeof currentValue === 'object' && !Array.isArray(currentValue)
+          ) {
+            mergedAiSources[key] = { ...currentValue, ...incomingValue }
           }
         }
 
         processedUpdates.aiSources = mergedAiSources
       }
-
-      // No longer encrypting API keys - store as plaintext
-      // Old encrypted values will be decrypted on read and saved as plaintext on next write
 
       const config = saveConfig(processedUpdates)
       return { success: true, data: config }

@@ -99,7 +99,6 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
       }
 
       const url = `${baseUrl}/models`
-      console.log('[ApiSetup] Fetching models from:', url)
 
       const response = await fetch(url, {
         method: 'GET',
@@ -109,14 +108,11 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
         }
       })
 
-      console.log('[ApiSetup] Fetch response status:', response.status)
-
       if (!response.ok) {
         throw new Error(`Failed to fetch models (${response.status})`)
       }
 
       const data = await response.json()
-      console.log('[ApiSetup] Fetch response data:', data)
 
       // OpenAI compatible format: { data: [{ id: 'model-id', ... }] }
       if (data.data && Array.isArray(data.data)) {
@@ -140,8 +136,7 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
       } else {
         throw new Error('Invalid API response format (expected data array)')
       }
-    } catch (err) {
-      console.error('Fetch models error:', err)
+    } catch {
       setError(t('Failed to fetch models. Check URL and Key.'))
     } finally {
       setIsFetchingModels(false)

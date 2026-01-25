@@ -273,28 +273,23 @@ export function SettingsPage() {
   }
 
   const handleToggleRemote = async () => {
-    console.log('[Settings] handleToggleRemote called, current status:', remoteStatus?.enabled)
-
     if (remoteStatus?.enabled) {
       // Disable
-      console.log('[Settings] Disabling remote access...')
       const response = await api.disableRemoteAccess()
-      console.log('[Settings] Disable response:', response)
-      setRemoteStatus(null)
-      setQrCode(null)
+      if (response.success) {
+        setRemoteStatus(null)
+        setQrCode(null)
+      }
     } else {
       // Enable
-      console.log('[Settings] Enabling remote access...')
       setIsEnablingRemote(true)
       try {
         const response = await api.enableRemoteAccess()
         if (response.success && response.data) {
           setRemoteStatus(response.data as RemoteAccessStatus)
-        } else {
-          console.error('[Settings] Enable failed:', response.error)
         }
-      } catch (error) {
-        console.error('[Settings] Enable error:', error)
+      } catch {
+        // Enable failed silently
       } finally {
         setIsEnablingRemote(false)
       }
@@ -458,8 +453,6 @@ export function SettingsPage() {
   }
 
   // Handle save Custom API - save both legacy api and aiSources.custom
-  // Handle save Custom API - save both legacy api and aiSources.custom
-  // Handle save Custom API - save both legacy api and aiSources.custom
   const handleSaveCustomApi = async () => {
     setIsValidating(true)
     setValidationResult(null)
@@ -519,8 +512,7 @@ export function SettingsPage() {
       // Close form
       setShowCustomApiForm(false)
       setEditingKey(null)
-    } catch (error) {
-      console.error('Save failed:', error)
+    } catch {
       setValidationResult({ valid: false, message: t('Save failed') })
     } finally {
       setIsValidating(false)
@@ -561,25 +553,18 @@ export function SettingsPage() {
     setValidationResult(null)
   }
 
-  // Handle delete custom source confirmation
+  // Handle delete custom source
   const handleDeleteCustom = async (key: string) => {
-    // If deleting current source, switch to something else (e.g. custom default if exists, or first available)
-
     const newAiSources = { ...config?.aiSources }
     delete newAiSources[key]
 
-    // Check if we need to update current
+    // If deleting current source, switch to fallback
     if (config?.aiSources?.current === key) {
-      // Fallback to default custom if exists, otherwise first available custom, otherwise clear?
       const firstRemain = Object.keys(newAiSources).find(k => k.startsWith('custom') && k !== 'current')
       newAiSources.current = (firstRemain || 'custom') as AISourceType
     }
 
-    const newConfig = {
-      ...config,
-      aiSources: newAiSources
-    } as HaloConfig
-
+    const newConfig = { ...config, aiSources: newAiSources } as HaloConfig
     await api.setConfig(newConfig)
     setConfig(newConfig)
     setShowDeleteConfirm(false)
@@ -625,10 +610,7 @@ export function SettingsPage() {
         baseUrl = baseUrl.replace(/\/chat\/completions$/, '')
       }
 
-      // Now we have likely .../v1 or just ...
-      // We accept that we append /models
       const url = `${baseUrl}/models`
-      console.log('[SettingsPage] Fetching models from:', url)
 
       const response = await fetch(url, {
         method: 'GET',
@@ -638,16 +620,11 @@ export function SettingsPage() {
         }
       })
 
-      console.log('[SettingsPage] Fetch response status:', response.status)
-
       if (!response.ok) {
-        // Try adding /v1 if missing?
-        // For now just error
         throw new Error(`Failed to fetch models (${response.status})`)
       }
 
       const data = await response.json()
-      console.log('[SettingsPage] Fetch response data:', data)
 
       // OpenAI compatible format: { data: [{ id: 'model-id', ... }] }
       if (data.data && Array.isArray(data.data)) {
@@ -671,8 +648,7 @@ export function SettingsPage() {
       } else {
         throw new Error('Invalid API response format')
       }
-    } catch (err) {
-      console.error('Fetch models error:', err)
+    } catch {
       setValidationResult({ valid: false, message: t('Failed to fetch models') })
     } finally {
       setIsFetchingModels(false)
