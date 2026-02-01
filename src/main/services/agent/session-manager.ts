@@ -15,7 +15,6 @@ import { app } from 'electron'
 import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
 import { getConfig, onApiConfigChange } from '../config.service'
 import { getConversation } from '../conversation.service'
-import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import type {
   V2SDKSession,
   V2SessionInfo,
@@ -27,12 +26,10 @@ import {
   getHeadlessElectronPath,
   getWorkingDir,
   getApiCredentials,
-  getEnabledMcpServers,
-  inferOpenAIWireApi
+  getEnabledMcpServers
 } from './helpers'
-import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
-import { createCanUseTool } from './permission-handler'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
+import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
 
 // ============================================
 // Session Maps
@@ -344,86 +341,29 @@ export async function ensureSessionWarm(
   // Create abortController - consistent with sendMessage
   const abortController = new AbortController()
 
-  // Get API credentials based on current aiSources configuration
+  // Get API credentials and resolve for SDK use
   const credentials = await getApiCredentials(config)
   console.log(`[Agent] Session warm using: ${credentials.provider}, model: ${credentials.model}`)
 
-  // Route through OpenAI compat router for non-Anthropic providers
-  let anthropicBaseUrl = credentials.baseUrl
-  let anthropicApiKey = credentials.apiKey
-  let sdkModel = credentials.model || 'claude-opus-4-5-20251101'
+  // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers)
+  const resolvedCredentials = await resolveCredentialsForSdk(credentials)
 
-  // For non-Anthropic providers (openai or OAuth), use the OpenAI compat router
-  if (credentials.provider !== 'anthropic') {
-    const router = await ensureOpenAICompatRouter({ debug: false })
-    anthropicBaseUrl = router.baseUrl
+  // Get enabled MCP servers
+  const enabledMcpServers = getEnabledMcpServers(config.mcpServers || {})
 
-    // Use apiType from credentials (set by provider), fallback to inference
-    const apiType = credentials.apiType
-      || (credentials.provider === 'oauth' ? 'chat_completions' : inferOpenAIWireApi(credentials.baseUrl))
-
-    anthropicApiKey = encodeBackendConfig({
-      url: credentials.baseUrl,
-      key: credentials.apiKey,
-      model: credentials.model,
-      headers: credentials.customHeaders,
-      apiType,
-      forceStream: credentials.forceStream,
-      filterContent: credentials.filterContent
-    })
-    // Pass a fake Claude model to CC for normal request handling
-    sdkModel = 'claude-sonnet-4-20250514'
-    console.log(`[Agent] ${credentials.provider} provider enabled (warm): routing via ${anthropicBaseUrl}, apiType=${apiType}`)
-  }
-
-  const sdkOptions: Record<string, any> = {
-    model: sdkModel,
-    cwd: workDir,
-    abortController,  // Consistent with sendMessage
-    env: {
-      // Inherit user env: PATH (git, node, python), HOME (config), HTTP_PROXY, LANG, SSH_AUTH_SOCK
-      ...process.env,
-
-      // Electron-specific: Run as Node.js process without GUI
-      ELECTRON_RUN_AS_NODE: 1,
-      ELECTRON_NO_ATTACH_CONSOLE: 1,
-
-      // API credentials for Claude Code
-      ANTHROPIC_API_KEY: anthropicApiKey,
-      ANTHROPIC_BASE_URL: anthropicBaseUrl,
-
-      // Use Halo's own config directory to avoid conflicts with CC's ~/.claude
-      CLAUDE_CONFIG_DIR: path.join(app.getPath('userData'), 'claude-config'),
-      // Ensure localhost bypasses proxy (for OpenAI compat router)
-      NO_PROXY: 'localhost,127.0.0.1',
-      no_proxy: 'localhost,127.0.0.1',
-      // Disable unnecessary API requests
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-      DISABLE_TELEMETRY: '1',
-      DISABLE_COST_WARNINGS: '1'
-    },
-    extraArgs: {
-      'dangerously-skip-permissions': null
-    },
-    stderr: (data: string) => {  // Consistent with sendMessage
+  // Build SDK options using shared configuration
+  const sdkOptions = buildBaseSdkOptions({
+    credentials: resolvedCredentials,
+    workDir,
+    electronPath,
+    spaceId,
+    conversationId,
+    abortController,
+    stderrHandler: (data: string) => {
       console.error(`[Agent][${conversationId}] CLI stderr (warm):`, data)
     },
-    // Use Halo's custom system prompt instead of SDK's 'claude_code' preset
-    systemPrompt: buildSystemPrompt({ workDir, modelInfo: credentials.model }),
-    maxTurns: 50,
-    allowedTools: [...DEFAULT_ALLOWED_TOOLS],
-    settingSources: ['user', 'project'],  // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
-    permissionMode: 'acceptEdits' as const,
-    canUseTool: createCanUseTool(workDir, spaceId, conversationId),  // Consistent with sendMessage
-    includePartialMessages: true,
-    executable: electronPath,
-    executableArgs: ['--no-warnings'],
-    // MCP servers configuration - pass through enabled servers only
-    ...((() => {
-      const enabledMcp = getEnabledMcpServers(config.mcpServers || {})
-      return enabledMcp ? { mcpServers: enabledMcp } : {}
-    })())
-  }
+    mcpServers: enabledMcpServers
+  })
 
   try {
     console.log(`[Agent] Warming up V2 session: ${conversationId}`)

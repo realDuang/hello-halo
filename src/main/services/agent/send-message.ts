@@ -9,12 +9,10 @@
  * - Error handling and recovery
  */
 
-import { app, BrowserWindow } from 'electron'
+import { BrowserWindow } from 'electron'
 import { getConfig } from '../config.service'
 import { getConversation, saveSessionId, addMessage, updateLastMessage } from '../conversation.service'
-import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import {
-  isAIBrowserTool,
   AI_BROWSER_SYSTEM_PROMPT,
   createAIBrowserMcpServer
 } from '../ai-browser'
@@ -31,15 +29,10 @@ import {
   getWorkingDir,
   getApiCredentials,
   getEnabledMcpServers,
-  inferOpenAIWireApi,
   sendToRenderer,
   setMainWindow
 } from './helpers'
-import {
-  buildSystemPrompt,
-  buildSystemPromptWithAIBrowser,
-  DEFAULT_ALLOWED_TOOLS
-} from './system-prompt'
+import { buildSystemPromptWithAIBrowser } from './system-prompt'
 import {
   getOrCreateV2Session,
   closeV2Session,
@@ -49,7 +42,6 @@ import {
   v2Sessions
 } from './session-manager'
 import { broadcastMcpStatus } from './mcp-manager'
-import { createCanUseTool } from './permission-handler'
 import {
   formatCanvasContext,
   buildMessageContent,
@@ -58,7 +50,7 @@ import {
   extractResultUsage
 } from './message-utils'
 import { onAgentError, runPpidScanAndCleanup } from '../health'
-import path from 'path'
+import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
 
 // ============================================
 // Send Message
@@ -97,37 +89,12 @@ export async function sendMessage(
   const config = getConfig()
   const workDir = getWorkingDir(spaceId)
 
-  // Get API credentials based on current aiSources configuration
+  // Get API credentials and resolve for SDK use
   const credentials = await getApiCredentials(config)
   console.log(`[Agent] sendMessage using: ${credentials.provider}, model: ${credentials.model}`)
 
-  // Route through OpenAI compat router for non-Anthropic providers
-  let anthropicBaseUrl = credentials.baseUrl
-  let anthropicApiKey = credentials.apiKey
-  let sdkModel = credentials.model || 'claude-opus-4-5-20251101'
-
-  // For non-Anthropic providers (openai or OAuth), use the OpenAI compat router
-  if (credentials.provider !== 'anthropic') {
-    const router = await ensureOpenAICompatRouter({ debug: false })
-    anthropicBaseUrl = router.baseUrl
-
-    // Use apiType from credentials (set by provider), fallback to inference
-    const apiType = credentials.apiType
-      || (credentials.provider === 'oauth' ? 'chat_completions' : inferOpenAIWireApi(credentials.baseUrl))
-
-    anthropicApiKey = encodeBackendConfig({
-      url: credentials.baseUrl,
-      key: credentials.apiKey,
-      model: credentials.model,
-      headers: credentials.customHeaders,
-      apiType,
-      forceStream: credentials.forceStream,
-      filterContent: credentials.filterContent
-    })
-    // Pass a fake Claude model to CC for normal request handling
-    sdkModel = 'claude-sonnet-4-20250514'
-    console.log(`[Agent] ${credentials.provider} provider enabled: routing via ${anthropicBaseUrl}, apiType=${apiType}`)
-  }
+  // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers)
+  const resolvedCredentials = await resolveCredentialsForSdk(credentials)
 
   // Get conversation for session resumption
   const conversation = getConversation(spaceId, conversationId)
@@ -162,86 +129,47 @@ export async function sendMessage(
     const electronPath = getHeadlessElectronPath()
     console.log(`[Agent] Using headless Electron as Node runtime: ${electronPath}`)
 
-    // Configure SDK options
-    // Note: These parameters require SDK patch to work in V2 Session
-    // Native SDK SDKSessionOptions only supports model, executable, executableArgs
-    // After patch supports full parameter pass-through, see notes in session-manager.ts
-    const sdkOptions: Record<string, any> = {
-      model: sdkModel,
-      cwd: workDir,
-      abortController: abortController,
-      env: {
-        // Inherit user env: PATH (git, node, python), HOME (config), HTTP_PROXY, LANG, SSH_AUTH_SOCK
-        ...process.env,
+    // Get enabled MCP servers
+    const enabledMcpServers = getEnabledMcpServers(config.mcpServers || {})
 
-        // Electron-specific: Run as Node.js process without GUI
-        ELECTRON_RUN_AS_NODE: 1,
-        ELECTRON_NO_ATTACH_CONSOLE: 1,
+    // Build MCP servers config (including AI Browser if enabled)
+    const mcpServers: Record<string, any> = enabledMcpServers ? { ...enabledMcpServers } : {}
+    if (aiBrowserEnabled) {
+      mcpServers['ai-browser'] = createAIBrowserMcpServer()
+      console.log(`[Agent][${conversationId}] AI Browser MCP server added`)
+    }
 
-        // API credentials for Claude Code
-        ANTHROPIC_API_KEY: anthropicApiKey,
-        ANTHROPIC_BASE_URL: anthropicBaseUrl,
-
-        // Use Halo's own config directory to avoid conflicts with CC's ~/.claude
-        CLAUDE_CONFIG_DIR: path.join(app.getPath('userData'), 'claude-config'),
-        // Ensure localhost bypasses proxy (for OpenAI compat router)
-        NO_PROXY: 'localhost,127.0.0.1',
-        no_proxy: 'localhost,127.0.0.1',
-        // Disable unnecessary API requests
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-        DISABLE_TELEMETRY: '1',
-        DISABLE_COST_WARNINGS: '1'
-      },
-      extraArgs: {
-        'dangerously-skip-permissions': null
-      },
-      stderr: (data: string) => {
+    // Build base SDK options using shared configuration
+    const sdkOptions = buildBaseSdkOptions({
+      credentials: resolvedCredentials,
+      workDir,
+      electronPath,
+      spaceId,
+      conversationId,
+      abortController,
+      stderrHandler: (data: string) => {
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data  // Accumulate for error reporting
       },
-      // Use Halo's custom system prompt instead of SDK's 'claude_code' preset
-      systemPrompt: aiBrowserEnabled
-        ? buildSystemPromptWithAIBrowser(
-            { workDir, modelInfo: credentials.model },
-            AI_BROWSER_SYSTEM_PROMPT
-          )
-        : buildSystemPrompt({ workDir, modelInfo: credentials.model }),
-      maxTurns: 50,
-      allowedTools: [...DEFAULT_ALLOWED_TOOLS],
-      settingSources: ['user', 'project'],  // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
-      permissionMode: 'acceptEdits' as const,
-      canUseTool: createCanUseTool(workDir, spaceId, conversationId),
-      includePartialMessages: true,  // Requires SDK patch: enable token-level streaming (stream_event)
-      executable: electronPath,
-      executableArgs: ['--no-warnings'],
-      // Extended thinking: enable when user requests it (10240 tokens, same as Claude Code CLI Tab)
-      ...(thinkingEnabled ? { maxThinkingTokens: 10240 } : {}),
-      // MCP servers configuration
-      // - Pass through enabled user MCP servers
-      // - Add AI Browser MCP server if enabled
-      //
-      // NOTE: SDK patch adds proper handling of SDK-type MCP servers in SessionImpl,
-      // extracting 'instance' before serialization (mirrors query() behavior).
-      // See patches/@anthropic-ai+claude-agent-sdk+0.1.76.patch
-      ...((() => {
-        const enabledMcp = getEnabledMcpServers(config.mcpServers || {})
-        const mcpServers: Record<string, any> = enabledMcp ? { ...enabledMcp } : {}
+      mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : null
+    })
 
-        // Add AI Browser as SDK MCP server if enabled
-        if (aiBrowserEnabled) {
-          mcpServers['ai-browser'] = createAIBrowserMcpServer()
-          console.log(`[Agent][${conversationId}] AI Browser MCP server added`)
-        }
-
-        return Object.keys(mcpServers).length > 0 ? { mcpServers } : {}
-      })())
+    // Apply dynamic configurations (AI Browser system prompt, Thinking mode)
+    // These are specific to sendMessage and not part of base options
+    if (aiBrowserEnabled) {
+      sdkOptions.systemPrompt = buildSystemPromptWithAIBrowser(
+        { workDir, modelInfo: resolvedCredentials.displayModel },
+        AI_BROWSER_SYSTEM_PROMPT
+      )
+    }
+    if (thinkingEnabled) {
+      sdkOptions.maxThinkingTokens = 10240
     }
 
     const t0 = Date.now()
     console.log(`[Agent][${conversationId}] Getting or creating V2 session...`)
 
     // Log MCP servers if configured (only enabled ones)
-    const enabledMcpServers = getEnabledMcpServers(config.mcpServers || {})
     const mcpServerNames = enabledMcpServers ? Object.keys(enabledMcpServers) : []
     if (mcpServerNames.length > 0) {
       console.log(`[Agent][${conversationId}] MCP servers configured: ${mcpServerNames.join(', ')}`)
@@ -264,8 +192,8 @@ export async function sendMessage(
       // Note: For OpenAI-compat/OAuth providers, model is encoded in apiKey and always fresh
       // This setModel call is mainly for pure Anthropic API sessions
       if (v2Session.setModel) {
-        await v2Session.setModel(sdkModel)
-        console.log(`[Agent][${conversationId}] Model set: ${sdkModel}`)
+        await v2Session.setModel(resolvedCredentials.sdkModel)
+        console.log(`[Agent][${conversationId}] Model set: ${resolvedCredentials.sdkModel}`)
       }
 
       // Set thinking tokens dynamically
@@ -287,7 +215,7 @@ export async function sendMessage(
       message,
       images,
       canvasContext,
-      credentials.model,
+      resolvedCredentials.displayModel,
       abortController,
       t0
     )
