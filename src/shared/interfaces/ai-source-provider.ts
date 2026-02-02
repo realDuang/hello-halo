@@ -13,6 +13,27 @@
  * - Providers are stateless services
  * - Configuration is stored externally (config service)
  * - Providers generate BackendRequestConfig for the OpenAI compat router
+ *
+ * Architecture Note (v2 Migration - IMPORTANT for contributors):
+ * ==============================================================
+ * The internal data structure migrated from v1 to v2:
+ *   v1: { current: 'custom', custom: {...}, 'github-copilot': {...} }
+ *   v2: { version: 2, currentId: 'uuid', sources: AISource[] }
+ *
+ * However, the provider interface still uses v1-style config access for
+ * backward compatibility with external plugins:
+ *
+ * - For OAuth providers: AISourceManager converts v2 AISource to v1 format
+ *   via buildLegacyOAuthConfig() before calling provider methods.
+ *   External plugins continue to work without modification.
+ *
+ * - For API Key providers: AISourceManager handles config directly from
+ *   AISource object, provider methods are NOT called at runtime.
+ *
+ * TODO (Future Major Version):
+ * - Migrate provider interface to accept AISource directly
+ * - Update all providers to use new interface
+ * - Update docs/custom-providers.md accordingly
  */
 
 import type {
@@ -77,6 +98,9 @@ export interface OAuthProvider {
  * - Managing their specific configuration
  * - Generating backend request configuration
  * - Handling authentication if required
+ *
+ * Note: The config parameter uses v1 legacy format for backward compatibility.
+ * See file header comments for migration details.
  */
 export interface AISourceProvider {
   /**
@@ -91,6 +115,10 @@ export interface AISourceProvider {
 
   /**
    * Check if this provider is configured and ready to use
+   *
+   * @param config Legacy format: { current: string, [providerType]: {...} }
+   *               For OAuth providers, manager passes converted v1 format.
+   *               For API Key providers, this method is NOT called at runtime.
    */
   isConfigured(config: AISourcesConfig): boolean
 
@@ -100,19 +128,25 @@ export interface AISourceProvider {
    * This is the core method that generates the config needed
    * by the OpenAI compat router to make actual API requests.
    *
-   * @param config Current AI sources configuration
+   * @param config Legacy format: { current: string, [providerType]: {...} }
+   *               For OAuth providers, manager passes converted v1 format.
+   *               For API Key providers, this method is NOT called at runtime.
    * @returns Backend request config or null if not configured
    */
   getBackendConfig(config: AISourcesConfig): BackendRequestConfig | null
 
   /**
    * Get the current model ID for this provider
+   *
+   * @param config Legacy format (see above)
    */
   getCurrentModel(config: AISourcesConfig): string | null
 
   /**
    * Get available models for this provider
    * May fetch from remote API or return static list
+   *
+   * @param config Legacy format (see above)
    */
   getAvailableModels(config: AISourcesConfig): Promise<string[]>
 
@@ -120,6 +154,7 @@ export interface AISourceProvider {
    * Refresh provider-specific configuration from remote API
    * (e.g., fetch available models, update user info)
    *
+   * @param config Legacy format (see above)
    * @returns Updated configuration for this provider
    */
   refreshConfig?(config: AISourcesConfig): Promise<ProviderResult<Partial<AISourcesConfig>>>

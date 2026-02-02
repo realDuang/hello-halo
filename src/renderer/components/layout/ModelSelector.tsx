@@ -245,7 +245,7 @@ export function ModelSelector() {
           className="w-full px-3 py-3 text-left text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors flex items-center gap-2"
         >
           <Plus className="w-3.5 h-3.5" />
-          {t('Add AI Source')}
+          {t('Add AI Provider')}
         </button>
       ) : (
         <button
@@ -253,7 +253,7 @@ export function ModelSelector() {
           className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors flex items-center gap-2"
         >
           <Plus className="w-3 h-3" />
-          {t('Manage Sources')}
+          {t('Manage AI Provider')}
         </button>
       )}
     </>

@@ -8,6 +8,24 @@
  * - Stateless: all state comes from config
  * - No authentication flow needed
  * - Supports both Anthropic and OpenAI compatible endpoints
+ *
+ * Architecture Note (v2 Migration):
+ * ================================
+ * As of v2, the data structure changed from:
+ *   v1: { current: 'custom', custom: {...}, 'github-copilot': {...} }
+ *   v2: { version: 2, currentId: 'uuid', sources: AISource[] }
+ *
+ * For API Key providers (like 'custom'), the AISourceManager now handles
+ * configuration directly from the AISource object, WITHOUT calling these
+ * provider methods. These methods are kept for interface compliance but
+ * are NOT called at runtime.
+ *
+ * For OAuth providers, the manager uses buildLegacyOAuthConfig() to convert
+ * v2 AISource to v1 format before calling provider methods, ensuring backward
+ * compatibility with external plugins.
+ *
+ * TODO: In a future major version, migrate provider interface to accept
+ * AISource directly instead of legacy config format.
  */
 
 import type {
@@ -16,8 +34,8 @@ import type {
 } from '../../../../shared/interfaces'
 import type {
   AISourceType,
-  AISourcesConfig,
   BackendRequestConfig,
+  LegacyAISourcesConfig,
   CustomSourceConfig
 } from '../../../../shared/types'
 import { AVAILABLE_MODELS } from '../../../../shared/types'
@@ -29,6 +47,11 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com'
 
 /**
  * Custom AI Source Provider Implementation
+ *
+ * NOTE: For 'custom' (API Key) providers, these methods are NOT called by
+ * AISourceManager at runtime. The manager reads configuration directly from
+ * the AISource object. These implementations exist only for interface
+ * compliance and potential future use.
  */
 export class CustomAISourceProvider implements AISourceProvider {
   readonly type: AISourceType = 'custom'
@@ -36,15 +59,19 @@ export class CustomAISourceProvider implements AISourceProvider {
 
   /**
    * Check if custom API is configured
+   *
+   * @param config - Legacy format config (v1), not called for API Key providers
    */
-  isConfigured(config: AISourcesConfig): boolean {
+  isConfigured(config: LegacyAISourcesConfig): boolean {
     return !!(config.custom?.apiKey)
   }
 
   /**
    * Get backend request configuration
+   *
+   * @param config - Legacy format config (v1), not called for API Key providers
    */
-  getBackendConfig(config: AISourcesConfig): BackendRequestConfig | null {
+  getBackendConfig(config: LegacyAISourcesConfig): BackendRequestConfig | null {
     const customConfig = config.custom
     if (!customConfig?.apiKey) {
       return null
@@ -79,15 +106,19 @@ export class CustomAISourceProvider implements AISourceProvider {
 
   /**
    * Get current model ID
+   *
+   * @param config - Legacy format config (v1), not called for API Key providers
    */
-  getCurrentModel(config: AISourcesConfig): string | null {
+  getCurrentModel(config: LegacyAISourcesConfig): string | null {
     return config.custom?.model || null
   }
 
   /**
    * Get available models - returns static list for custom API
+   *
+   * @param config - Legacy format config (v1), not called for API Key providers
    */
-  async getAvailableModels(config: AISourcesConfig): Promise<string[]> {
+  async getAvailableModels(config: LegacyAISourcesConfig): Promise<string[]> {
     const customConfig = config.custom
     if (!customConfig) {
       return []
@@ -106,7 +137,7 @@ export class CustomAISourceProvider implements AISourceProvider {
   /**
    * No refresh needed for custom API
    */
-  async refreshConfig(_config: AISourcesConfig): Promise<ProviderResult<Partial<AISourcesConfig>>> {
+  async refreshConfig(_config: LegacyAISourcesConfig): Promise<ProviderResult<Partial<LegacyAISourcesConfig>>> {
     // Custom API doesn't need refresh - configuration is static
     return { success: true, data: {} }
   }

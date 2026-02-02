@@ -505,7 +505,7 @@ function migrateAiSourcesToV2(parsed: Record<string, any>): AISourcesConfig {
         name: builtin?.name || key,
         provider: key,
         authType: 'oauth',
-        apiUrl: builtin?.apiUrl || 'https://api.githubcopilot.com',
+        apiUrl: '',
         accessToken: oauthConfig.accessToken,
         refreshToken: oauthConfig.refreshToken,
         tokenExpires: oauthConfig.tokenExpires,

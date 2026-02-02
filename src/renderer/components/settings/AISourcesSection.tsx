@@ -10,12 +10,14 @@
  * - Add new source via ProviderSelector
  * - Edit existing source configuration
  * - Delete source with confirmation
- * - OAuth provider support (GitHub Copilot)
+ * - Dynamic OAuth provider support (configured via product.json)
  */
 
 import { useState, useEffect } from 'react'
 import {
-  Plus, Check, ChevronDown, ChevronRight, Edit2, Trash2, LogOut, Loader2, Key, Globe
+  Plus, Check, ChevronDown, ChevronRight, Edit2, Trash2, LogOut, Loader2, Key, Globe,
+  LogIn, User, Cloud, Server, Shield, Lock, Zap, MessageSquare, Wrench, Github,
+  type LucideIcon
 } from 'lucide-react'
 import type {
   AISource,
@@ -24,9 +26,81 @@ import type {
   ProviderId
 } from '../../types'
 import { getBuiltinProvider, isOAuthProvider as isOAuthProviderFn } from '../../types'
-import { useTranslation } from '../../i18n'
+import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ProviderSelector } from './ProviderSelector'
+
+// ============================================================================
+// Types for dynamic OAuth providers (from product.json)
+// ============================================================================
+
+/**
+ * Localized text - either a simple string or object with language codes
+ */
+type LocalizedText = string | Record<string, string>
+
+/**
+ * Provider configuration from backend (product.json)
+ */
+interface AuthProviderConfig {
+  type: string
+  displayName: LocalizedText
+  description: LocalizedText
+  icon: string
+  iconBgColor: string
+  recommended: boolean
+  enabled: boolean
+  builtin?: boolean
+}
+
+// ============================================================================
+// Helper functions for dynamic providers
+// ============================================================================
+
+/**
+ * Get localized text based on current language
+ */
+function getLocalizedText(value: LocalizedText): string {
+  if (typeof value === 'string') {
+    return value
+  }
+  const lang = getCurrentLanguage()
+  return value[lang] || value['en'] || Object.values(value)[0] || ''
+}
+
+/**
+ * Map icon names to Lucide components
+ */
+const iconMap: Record<string, LucideIcon> = {
+  'log-in': LogIn,
+  'user': User,
+  'globe': Globe,
+  'key': Key,
+  'cloud': Cloud,
+  'server': Server,
+  'shield': Shield,
+  'lock': Lock,
+  'zap': Zap,
+  'message-square': MessageSquare,
+  'wrench': Wrench,
+  'github': Github
+}
+
+/**
+ * Get icon component by name
+ */
+function getIconComponent(iconName: string): LucideIcon {
+  return iconMap[iconName] || Globe
+}
+
+/**
+ * Convert hex color to RGBA with opacity
+ */
+function hexToRgba(hex: string, alpha: number = 0.15): string {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+  if (!result) return `rgba(128, 128, 128, ${alpha})`
+  return `rgba(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}, ${alpha})`
+}
 
 interface AISourcesSectionProps {
   config: HaloConfig
@@ -60,6 +134,29 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   // OAuth state
   const [loginState, setLoginState] = useState<OAuthLoginState | null>(null)
   const [loggingOutSourceId, setLoggingOutSourceId] = useState<string | null>(null)
+
+  // Dynamic OAuth providers from product.json
+  const [oauthProviders, setOAuthProviders] = useState<AuthProviderConfig[]>([])
+
+  // Fetch available OAuth providers on mount
+  useEffect(() => {
+    const fetchProviders = async () => {
+      try {
+        const result = await api.authGetProviders()
+        if (result.success && result.data) {
+          // Filter to get only OAuth providers (exclude 'custom' which is API Key based)
+          // Note: 'builtin' means the provider code is bundled in the app, not that it's not OAuth
+          // Both external and builtin OAuth providers should be shown here
+          const providers = (result.data as AuthProviderConfig[])
+            .filter(p => p.type !== 'custom')
+          setOAuthProviders(providers)
+        }
+      } catch (error) {
+        console.error('[AISourcesSection] Failed to fetch auth providers:', error)
+      }
+    }
+    fetchProviders()
+  }, [])
 
   // Listen for OAuth login progress
   useEffect(() => {
@@ -359,7 +456,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     return (
       <div className="space-y-4">
         <h3 className="font-medium text-text-primary">
-          {editingSourceId ? t('Edit Source') : t('Add AI Source')}
+          {editingSourceId ? t('Edit Provider') : t('Add AI Provider')}
         </h3>
         <ProviderSelector
           aiSources={aiSources}
@@ -450,30 +547,54 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                  rounded-lg transition-colors"
       >
         <Plus size={18} />
-        {t('Add AI Source')}
+        {t('Add AI Provider')}
       </button>
 
-      {/* OAuth Providers (GitHub Copilot) */}
-      {!aiSources.sources.some(s => s.provider === 'github-copilot') && (
-        <div className="pt-4 border-t border-border-secondary">
-          <h4 className="text-sm font-medium text-text-secondary mb-3">
-            {t('OAuth Login')}
-          </h4>
-          <button
-            onClick={() => handleOAuthLogin('github-copilot')}
-            className="flex items-center gap-3 w-full p-3 bg-surface-secondary hover:bg-surface-tertiary
-                     border border-border-primary rounded-lg transition-colors"
-          >
-            <div className="w-10 h-10 rounded-lg bg-gray-900 flex items-center justify-center">
-              <Globe size={20} className="text-white" />
+      {/* Dynamic OAuth Providers (from product.json) */}
+      {(() => {
+        // Filter out providers that are already logged in
+        const availableOAuthProviders = oauthProviders.filter(
+          provider => !aiSources.sources.some(s => s.provider === provider.type)
+        )
+
+        if (availableOAuthProviders.length === 0) return null
+
+        return (
+          <div className="pt-4 border-t border-border-secondary">
+            <h4 className="text-sm font-medium text-text-secondary mb-3">
+              {t('OAuth Login')}
+            </h4>
+            <div className="space-y-2">
+              {availableOAuthProviders.map(provider => {
+                const IconComponent = getIconComponent(provider.icon)
+                return (
+                  <button
+                    key={provider.type}
+                    onClick={() => handleOAuthLogin(provider.type as ProviderId)}
+                    className="flex items-center gap-3 w-full p-3 bg-surface-secondary hover:bg-surface-tertiary
+                             border border-border-primary rounded-lg transition-colors"
+                  >
+                    <div
+                      className="w-10 h-10 rounded-lg flex items-center justify-center"
+                      style={{ backgroundColor: provider.iconBgColor }}
+                    >
+                      <IconComponent size={20} className="text-white" />
+                    </div>
+                    <div className="flex-1 text-left">
+                      <div className="font-medium text-text-primary">
+                        {getLocalizedText(provider.displayName)}
+                      </div>
+                      <div className="text-xs text-text-secondary">
+                        {getLocalizedText(provider.description)}
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
             </div>
-            <div className="flex-1 text-left">
-              <div className="font-medium text-text-primary">GitHub Copilot</div>
-              <div className="text-xs text-text-secondary">{t('Login with GitHub account')}</div>
-            </div>
-          </button>
-        </div>
-      )}
+          </div>
+        )
+      })()}
     </div>
   )
 }

@@ -115,9 +115,9 @@ export function stopSessionCleanup(): void {
  *   $CLAUDE_CONFIG_DIR/projects/<project-dir>/<session-id>.jsonl
  *
  * Project directory naming rule (cross-platform):
- *   Replace path separators (/ \), dots (.), colons (:), and non-ASCII chars with '-'
+ *   Replace all non-alphanumeric characters with '-' (same as Claude Code CLI)
  *   e.g., /Users/fly/Desktop/myproject -> -Users-fly-Desktop-myproject
- *   e.g., C:\Users\fly\.halo\spaces\测试 -> C--Users-fly--halo-spaces---
+ *   e.g., /Volumes/one_tb/code2/hello-halo -> -Volumes-one-tb-code2-hello-halo
  *
  * @param workDir - Working directory (used to compute project directory name)
  * @param sessionId - Session ID
@@ -126,9 +126,8 @@ export function stopSessionCleanup(): void {
  */
 function migrateSessionIfNeeded(workDir: string, sessionId: string): boolean {
   // 1. Compute project directory name using the same rule as Claude Code CLI:
-  //    Replace path separators (/ and \), colons (:), dots (.), and all non-ASCII characters with -
-  //    Colon is needed for Windows drive letters (C:)
-  const projectDir = workDir.replace(/[\/\\.:]/g, '-').replace(/[^\x00-\x7F]/g, '-')
+  //    Replace all non-alphanumeric characters with '-'
+  const projectDir = workDir.replace(/[^a-zA-Z0-9]/g, '-')
   const sessionFile = `${sessionId}.jsonl`
 
   console.log(`[Agent] Migration check: workDir="${workDir}" -> projectDir="${projectDir}"`)

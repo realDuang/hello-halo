@@ -17,6 +17,8 @@ interface UseSmartScrollOptions {
   threshold?: number
   /** Dependencies that trigger scroll check (e.g., messages, streaming content) */
   deps?: unknown[]
+  /** Scroll behavior for auto-scroll (default: 'smooth') */
+  behavior?: ScrollBehavior
 }
 
 interface UseSmartScrollReturn {
@@ -29,7 +31,7 @@ interface UseSmartScrollReturn {
 }
 
 export function useSmartScroll(options: UseSmartScrollOptions): UseSmartScrollReturn {
-  const { containerRef, threshold = 100, deps = [] } = options
+  const { containerRef, threshold = 100, deps = [], behavior = 'smooth' } = options
 
   // Track if user has scrolled away from bottom
   const [isAtBottom, setIsAtBottom] = useState(true)
@@ -111,10 +113,10 @@ export function useSmartScroll(options: UseSmartScrollOptions): UseSmartScrollRe
   useEffect(() => {
     // Only auto-scroll if user hasn't scrolled away
     if (isAtBottom) {
-      scrollToBottom('smooth')
+      scrollToBottom(behavior)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps)
+  }, [...deps, behavior])
 
   return {
     showScrollButton,

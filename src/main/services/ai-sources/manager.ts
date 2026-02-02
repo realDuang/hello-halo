@@ -451,7 +451,7 @@ class AISourceManager {
         name: builtin?.name || providerType,
         provider: providerType,
         authType: 'oauth',
-        apiUrl: builtin?.apiUrl || 'https://api.githubcopilot.com',
+        apiUrl: '',
         accessToken: tokenData?.accessToken || '',
         refreshToken: tokenData?.refreshToken || '',
         tokenExpires: tokenData?.expiresAt,
