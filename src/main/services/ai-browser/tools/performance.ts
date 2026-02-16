@@ -3,9 +3,14 @@
  *
  * Tools for capturing and analyzing performance traces.
  * Tool descriptions aligned with chrome-devtools-mcp for 100% compatibility.
+ *
+ * WARNING: This file is DEAD CODE. The actual tool handlers run from
+ * sdk-mcp-server.ts via the SDK MCP server. These definitions are never
+ * executed at runtime. See sdk-mcp-server.ts header for refactor plan.
  */
 
-import type { AIBrowserTool, ToolResult } from '../types'
+import type { AIBrowserTool, ToolResult, BrowserContextInterface } from '../types'
+import { browserViewManager } from '../../browser-view.service'
 
 // Trace state stored per context
 interface TraceState {
@@ -81,8 +86,8 @@ export const performanceStartTraceTool: AIBrowserTool = {
     try {
       // If reload is requested, first navigate to about:blank
       if (reload) {
-        const currentUrl = await context.getPageUrl()
-        await context.navigate('about:blank')
+        const currentUrl = context.getPageUrl()
+        await browserViewManager.navigate(viewId, 'about:blank')
         await new Promise(resolve => setTimeout(resolve, 500))
 
         // Start tracing
@@ -98,7 +103,8 @@ export const performanceStartTraceTool: AIBrowserTool = {
         })
 
         // Navigate back to original URL
-        await context.navigate(currentUrl)
+        await browserViewManager.navigate(viewId, currentUrl)
+        await context.waitForNavigation(30000)
       } else {
         // Start tracing without reload
         await context.sendCDPCommand('Tracing.start', {
@@ -296,7 +302,7 @@ export const performanceAnalyzeInsightTool: AIBrowserTool = {
 /**
  * Get performance metrics via CDP
  */
-async function getPerformanceMetrics(context: any): Promise<Record<string, number>> {
+async function getPerformanceMetrics(context: BrowserContextInterface): Promise<Record<string, number>> {
   try {
     const result = await context.sendCDPCommand<{
       metrics: Array<{ name: string; value: number }>

@@ -19,6 +19,7 @@ export interface ApiCredentials {
   baseUrl: string
   apiKey: string
   model: string
+  displayModel?: string
   provider: 'anthropic' | 'openai' | 'oauth'
   /** Custom headers for OAuth providers */
   customHeaders?: Record<string, string>

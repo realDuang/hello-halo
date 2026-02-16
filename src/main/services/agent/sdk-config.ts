@@ -111,7 +111,7 @@ export async function resolveCredentialsForSdk(
   let anthropicBaseUrl = credentials.baseUrl
   let anthropicApiKey = credentials.apiKey
   let sdkModel = credentials.model || 'claude-opus-4-5-20251101'
-  const displayModel = credentials.model
+  const displayModel = credentials.displayModel || credentials.model
 
   // For non-Anthropic providers (openai or OAuth), use the OpenAI compat router
   if (credentials.provider !== 'anthropic') {
@@ -172,7 +172,7 @@ async function resolveAnthropicPassthrough(
     anthropicBaseUrl: router.baseUrl,
     anthropicApiKey,
     sdkModel: credentials.model || 'claude-opus-4-5-20251101',
-    displayModel: credentials.model
+    displayModel: credentials.displayModel || credentials.model
   }
 }
 

@@ -378,7 +378,6 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     region: 'global',
     icon: 'github'
   },
-
 ]
 
 // ============================================================================

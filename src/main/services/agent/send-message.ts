@@ -95,26 +95,14 @@ export async function sendMessage(
   const config = getConfig()
   const workDir = getWorkingDir(spaceId)
 
-  // Get API credentials and resolve for SDK use
-  const credentials = await getApiCredentials(config)
-  console.log(`[Agent] sendMessage using: ${credentials.provider}, model: ${credentials.model}`)
-
-  // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers)
-  const resolvedCredentials = await resolveCredentialsForSdk(credentials)
-
-  // Get conversation for session resumption
-  const conversation = getConversation(spaceId, conversationId)
-  const sessionId = resumeSessionId || conversation?.sessionId
-
   // Create abort controller for this session
   const abortController = new AbortController()
 
   // Accumulate stderr for detailed error messages
   let stderrBuffer = ''
 
-  // Register this session in the active sessions map
+  // Create session state (registered as active AFTER session is ready, see below)
   const sessionState = createSessionState(spaceId, conversationId, abortController)
-  registerActiveSession(conversationId, sessionState)
 
   // Add user message to conversation (with images if provided)
   addMessage(spaceId, conversationId, {
@@ -131,6 +119,16 @@ export async function sendMessage(
   })
 
   try {
+    // Get API credentials and resolve for SDK use (inside try/catch so errors reach frontend)
+    const credentials = await getApiCredentials(config)
+    console.log(`[Agent] sendMessage using: ${credentials.provider}, model: ${credentials.model}`)
+
+    // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers)
+    const resolvedCredentials = await resolveCredentialsForSdk(credentials)
+
+    // Get conversation for session resumption
+    const conversation = getConversation(spaceId, conversationId)
+    const sessionId = resumeSessionId || conversation?.sessionId
     // Use headless Electron binary (outside .app bundle on macOS to prevent Dock icon)
     const electronPath = getHeadlessElectronPath()
     console.log(`[Agent] Using headless Electron as Node runtime: ${electronPath}`)
@@ -190,6 +188,11 @@ export async function sendMessage(
     // Pass config for rebuild detection when aiBrowserEnabled changes
     // Pass workDir for session migration support (from old ~/.claude to new config dir)
     const v2Session = await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId, sessionConfig, workDir)
+
+    // Register as active AFTER session is ready, so getOrCreateV2Session's
+    // in-flight check doesn't mistake the current request as a concurrent one
+    // (which would incorrectly defer session rebuild when aiBrowserEnabled changes)
+    registerActiveSession(conversationId, sessionState)
 
     // Dynamic runtime parameter adjustment (via SDK patch)
     // Note: Model switching is handled by session rebuild (model change triggers

@@ -4,426 +4,494 @@
  * Creates an in-process MCP server using Claude Agent SDK's
  * tool() and createSdkMcpServer() functions.
  *
- * This allows AI Browser tools to be properly registered with the SDK
- * and executed internally without external process spawning.
+ * This is the single authoritative implementation of all AI Browser tools.
+ * Every tool handler is wrapped with a per-tool timeout to prevent
+ * indefinite hangs when the browser becomes unresponsive.
+ *
+ * NOTE: The tools/ directory contains a DEAD CODE duplicate of these handlers
+ * using JSON Schema format. That code is never executed — all live tool calls
+ * go through this file via the SDK MCP server.
+ *
+ * TODO: Refactor — split this 1200+ line file into tools/ by category
+ * (input.ts, navigation.ts, snapshot.ts, etc.), each using SDK tool() + Zod.
+ * This file should then become a thin aggregation layer that imports and
+ * re-exports. The current tools/ JSON Schema definitions and their IPC
+ * plumbing (index.ts executeAIBrowserTool, ipc/ai-browser.ts handlers with
+ * no renderer callers) should be deleted as part of that refactor.
  */
 
 import { z } from 'zod'
 import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
-import type { BrowserContextInterface } from './types'
 import { browserContext } from './context'
 import { browserViewManager } from '../browser-view.service'
 
 // ============================================
-// Navigation Tools
+// Constants
+// ============================================
+
+/** Default per-tool timeout (ms). Individual tools may override. */
+const TOOL_TIMEOUT = 60_000
+/** Default navigation wait timeout (ms). */
+const NAV_TIMEOUT = 30_000
+
+// ============================================
+// Helpers
+// ============================================
+
+/** Convenience: wrap a promise with a timeout guard. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    promise.then(
+      v => { clearTimeout(timer); resolve(v) },
+      e => { clearTimeout(timer); reject(e) }
+    )
+  })
+}
+
+/** Build a standard text content response. */
+function textResult(text: string, isError = false) {
+  return {
+    content: [{ type: 'text' as const, text }],
+    ...(isError ? { isError: true } : {})
+  }
+}
+
+/** Build an image + text content response. */
+function imageResult(text: string, data: string, mimeType: string) {
+  return {
+    content: [
+      { type: 'text' as const, text },
+      { type: 'image' as const, data, mimeType }
+    ]
+  }
+}
+
+/**
+ * Determine how to fill a form element, handling combobox disambiguation.
+ *
+ * - combobox with option children → select-like (e.g. <select>), use selectOption.
+ *   If no matching option is found, fall back to fillElement for editable comboboxes
+ *   that happen to have autocomplete suggestions showing.
+ * - combobox without option children → editable (e.g. search input), use fillElement.
+ * - everything else → fillElement.
+ */
+async function fillFormElement(uid: string, value: string): Promise<void> {
+  const element = browserContext.getElementByUid(uid)
+
+  if (element && element.role === 'combobox') {
+    const hasOptions = element.children?.some(child => child.role === 'option')
+    if (hasOptions) {
+      try {
+        await browserContext.selectOption(uid, value)
+        return
+      } catch (e) {
+        // Only fall back for "option not found" — rethrow infrastructure errors (CDP failures, etc.)
+        if (!(e instanceof Error) || !e.message.includes('Could not find option')) {
+          throw e
+        }
+        // No matching option — combobox may be editable, fall back to text input
+      }
+    }
+    // Editable combobox (no options, or no matching option) — fill as text
+    await browserContext.fillElement(uid, value)
+    return
+  }
+
+  await browserContext.fillElement(uid, value)
+}
+
+// ============================================
+// Navigation Tools (8 tools)
 // ============================================
 
 const browser_list_pages = tool(
   'browser_list_pages',
-  'List all open browser pages/tabs with their URLs and titles',
+  'Get a list of pages open in the browser.',
   {},
   async () => {
-    const states = (browserViewManager as any).getAllStates?.() || []
+    const states = browserViewManager.getAllStates()
 
     if (states.length === 0) {
-      return {
-        content: [{ type: 'text' as const, text: 'No browser pages are currently open.' }]
-      }
+      return textResult('No browser pages are currently open.')
     }
 
     const lines = ['Open browser pages:']
-    states.forEach((state: any, index: number) => {
+    states.forEach((state, index) => {
       lines.push(`[${index}] ${state.title || 'Untitled'} - ${state.url || 'about:blank'}`)
     })
 
-    return {
-      content: [{ type: 'text' as const, text: lines.join('\n') }]
-    }
+    return textResult(lines.join('\n'))
   }
 )
 
 const browser_select_page = tool(
   'browser_select_page',
-  'Select a browser page by index to make it the active page for subsequent operations',
+  'Select a page as a context for future tool calls.',
   {
-    pageIdx: z.number().describe('The index of the page to select (from list_pages output)'),
-    bringToFront: z.boolean().optional().describe('Whether to bring the page to front (default: true)')
+    pageIdx: z.number().describe('The index of the page to select. Call browser_list_pages to get available pages.'),
+    bringToFront: z.boolean().optional().describe('Whether to focus the page and bring it to the top.')
   },
   async (args) => {
-    const states = (browserViewManager as any).getAllStates?.() || []
+    const states = browserViewManager.getAllStates()
 
     if (args.pageIdx < 0 || args.pageIdx >= states.length) {
-      return {
-        content: [{ type: 'text' as const, text: `Invalid page index: ${args.pageIdx}. Valid range: 0-${states.length - 1}` }],
-        isError: true
-      }
+      return textResult(`Invalid page index: ${args.pageIdx}. Valid range: 0-${states.length - 1}`, true)
     }
 
     const state = states[args.pageIdx]
     browserContext.setActiveViewId(state.id)
 
-    return {
-      content: [{ type: 'text' as const, text: `Selected page [${args.pageIdx}]: ${state.title || 'Untitled'} - ${state.url}` }]
-    }
+    return textResult(`Selected page [${args.pageIdx}]: ${state.title || 'Untitled'} - ${state.url}`)
   }
 )
 
 const browser_new_page = tool(
   'browser_new_page',
-  'Create a new browser page and navigate to the specified URL',
+  'Creates a new page',
   {
-    url: z.string().describe('The URL to navigate to'),
-    timeout: z.number().optional().describe('Navigation timeout in milliseconds (default: 30000)')
+    url: z.string().describe('URL to load in a new page.'),
+    timeout: z.number().int().optional().describe('Maximum wait time in milliseconds. If set to 0, the default timeout will be used.')
   },
   async (args) => {
-    const timeout = args.timeout || 30000
+    const timeout = (args.timeout && args.timeout > 0) ? args.timeout : NAV_TIMEOUT
 
     try {
       const viewId = `ai-browser-${Date.now()}`
-      const state = await browserViewManager.create(viewId, args.url)
+      await browserViewManager.create(viewId, args.url)
       browserContext.setActiveViewId(viewId)
 
-      // Wait for page load
-      const startTime = Date.now()
-      while (Date.now() - startTime < timeout) {
-        const currentState = browserViewManager.getState(viewId)
-        if (currentState && !currentState.isLoading) {
-          break
-        }
-        await new Promise(resolve => setTimeout(resolve, 100))
-      }
+      // Wait for navigation with timeout protection (no busy-wait)
+      await browserContext.waitForNavigation(timeout)
 
       const finalState = browserViewManager.getState(viewId)
-      return {
-        content: [{ type: 'text' as const, text: `Created new page: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}` }]
-      }
+      return textResult(`Created new page: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}`)
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to create new page: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to create new page: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_close_page = tool(
   'browser_close_page',
-  'Close a browser page by index',
+  'Closes the page by its index. The last open page cannot be closed.',
   {
-    pageIdx: z.number().describe('The index of the page to close')
+    pageIdx: z.number().describe('The index of the page to close. Call list_pages to list pages.')
   },
   async (args) => {
-    const states = (browserViewManager as any).getAllStates?.() || []
+    const states = browserViewManager.getAllStates()
 
     if (args.pageIdx < 0 || args.pageIdx >= states.length) {
-      return {
-        content: [{ type: 'text' as const, text: `Invalid page index: ${args.pageIdx}` }],
-        isError: true
-      }
+      return textResult(`Invalid page index: ${args.pageIdx}`, true)
+    }
+
+    if (states.length === 1) {
+      return textResult('The last open page cannot be closed.', true)
     }
 
     const state = states[args.pageIdx]
     browserViewManager.destroy(state.id)
 
-    return {
-      content: [{ type: 'text' as const, text: `Closed page [${args.pageIdx}]: ${state.title || 'Untitled'}` }]
-    }
+    return textResult(`Closed page [${args.pageIdx}]: ${state.title || 'Untitled'}`)
   }
 )
 
 const browser_navigate = tool(
   'browser_navigate',
-  'Navigate to a URL, go back, go forward, or reload the current page',
+  'Navigates the currently selected page to a URL.',
   {
-    type: z.enum(['url', 'back', 'forward', 'reload']).optional().describe('Navigation type'),
-    url: z.string().optional().describe('The URL to navigate to (required if type is "url")'),
-    ignoreCache: z.boolean().optional().describe('Whether to ignore cache when reloading'),
-    timeout: z.number().optional().describe('Navigation timeout in milliseconds (default: 30000)')
+    type: z.enum(['url', 'back', 'forward', 'reload']).optional().describe('Navigate the page by URL, back or forward in history, or reload.'),
+    url: z.string().optional().describe('Target URL (only type=url)'),
+    ignoreCache: z.boolean().optional().describe('Whether to ignore cache on reload.'),
+    timeout: z.number().int().optional().describe('Maximum wait time in milliseconds. If set to 0, the default timeout will be used.')
   },
   async (args) => {
-    const type = args.type || 'url'
-    const timeout = args.timeout || 30000
+    const navType = args.type || (args.url ? 'url' : undefined)
+    const timeout = (args.timeout && args.timeout > 0) ? args.timeout : NAV_TIMEOUT
+
+    if (!navType && !args.url) {
+      return textResult('Either URL or a type is required.', true)
+    }
 
     const viewId = browserContext.getActiveViewId()
     if (!viewId) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page. Use browser_new_page first.' }],
-        isError: true
-      }
+      return textResult('No active browser page. Use browser_new_page first.', true)
     }
 
     try {
-      switch (type) {
+      switch (navType) {
         case 'back':
           browserViewManager.goBack(viewId)
-          break
+          await browserContext.waitForNavigation(timeout)
+          return textResult(`Successfully navigated back.`)
         case 'forward':
           browserViewManager.goForward(viewId)
-          break
+          await browserContext.waitForNavigation(timeout)
+          return textResult(`Successfully navigated forward.`)
         case 'reload':
           browserViewManager.reload(viewId)
-          break
+          await browserContext.waitForNavigation(timeout)
+          return textResult(`Successfully reloaded the page.`)
         case 'url':
         default:
           if (!args.url) {
-            return {
-              content: [{ type: 'text' as const, text: 'URL is required for navigation' }],
-              isError: true
-            }
+            return textResult('A URL is required for navigation of type=url.', true)
           }
           await browserViewManager.navigate(viewId, args.url)
+          await browserContext.waitForNavigation(timeout)
           break
-      }
-
-      // Wait for navigation
-      const startTime = Date.now()
-      while (Date.now() - startTime < timeout) {
-        const state = browserViewManager.getState(viewId)
-        if (state && !state.isLoading) {
-          break
-        }
-        await new Promise(resolve => setTimeout(resolve, 100))
       }
 
       const finalState = browserViewManager.getState(viewId)
-      return {
-        content: [{ type: 'text' as const, text: `Navigated to: ${finalState?.title || 'Untitled'} - ${finalState?.url}` }]
-      }
+      return textResult(`Successfully navigated to ${finalState?.url || args.url}.`)
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Navigation failed: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Unable to navigate in the selected page: ${(error as Error).message}.`, true)
     }
   }
 )
 
 const browser_wait_for = tool(
   'browser_wait_for',
-  'Wait for specific text to appear on the page',
+  'Wait for the specified text to appear on the selected page.',
   {
-    text: z.string().describe('The text to wait for'),
-    timeout: z.number().optional().describe('Maximum time to wait in milliseconds (default: 30000)')
+    text: z.string().describe('Text to appear on the page'),
+    timeout: z.number().int().optional().describe('Maximum wait time in milliseconds. If set to 0, the default timeout will be used.')
   },
   async (args) => {
-    const timeout = args.timeout || 30000
+    const timeout = (args.timeout && args.timeout > 0) ? args.timeout : NAV_TIMEOUT
 
     try {
       await browserContext.waitForText(args.text, timeout)
-      return {
-        content: [{ type: 'text' as const, text: `Found text: "${args.text}"` }]
-      }
+      return textResult(`Element with text "${args.text}" found.`)
+    } catch {
+      return textResult(`Timeout waiting for text: "${args.text}"`, true)
+    }
+  }
+)
+
+const browser_resize = tool(
+  'browser_resize',
+  "Resizes the selected page's window so that the page has specified dimension",
+  {
+    width: z.number().describe('Page width'),
+    height: z.number().describe('Page height')
+  },
+  async (args) => {
+    if (!browserContext.getActiveViewId()) {
+      return textResult('No active browser page.', true)
+    }
+
+    try {
+      await browserContext.setViewportSize(args.width, args.height)
+      return textResult(`Viewport resized to: ${args.width}x${args.height}`)
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Timeout waiting for text: "${args.text}"` }],
-        isError: true
-      }
+      return textResult(`Resize failed: ${(error as Error).message}`, true)
+    }
+  }
+)
+
+const browser_handle_dialog = tool(
+  'browser_handle_dialog',
+  'If a browser dialog was opened, use this command to handle it',
+  {
+    action: z.enum(['accept', 'dismiss']).describe('Whether to dismiss or accept the dialog'),
+    promptText: z.string().optional().describe('Optional prompt text to enter into the dialog.')
+  },
+  async (args) => {
+    const dialog = browserContext.getPendingDialog()
+    if (!dialog) {
+      return textResult('No open dialog found', true)
+    }
+
+    try {
+      await browserContext.handleDialog(args.action === 'accept', args.promptText)
+      return textResult(`Successfully ${args.action === 'accept' ? 'accepted' : 'dismissed'} the dialog`)
+    } catch (error) {
+      return textResult(`Failed to handle dialog: ${(error as Error).message}`, true)
     }
   }
 )
 
 // ============================================
-// Input Tools
+// Input Tools (7 tools)
 // ============================================
 
 const browser_click = tool(
   'browser_click',
-  'Click on an element identified by its UID from the accessibility snapshot',
+  'Clicks on the provided element',
   {
-    uid: z.string().describe('The unique ID of the element to click (from take_snapshot output)'),
-    dblClick: z.boolean().optional().describe('Whether to perform a double click (default: false)')
+    uid: z.string().describe('The uid of an element on the page from the page content snapshot'),
+    dblClick: z.boolean().optional().describe('Set to true for double clicks. Default is false.')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page. Use browser_new_page first.' }],
-        isError: true
-      }
+      return textResult('No active browser page. Use browser_new_page first.', true)
     }
 
     try {
-      await browserContext.clickElement(args.uid, { dblClick: args.dblClick || false })
-      return {
-        content: [{ type: 'text' as const, text: `Clicked element: ${args.uid}${args.dblClick ? ' (double-click)' : ''}` }]
-      }
+      await withTimeout(
+        browserContext.clickElement(args.uid, { dblClick: args.dblClick || false }),
+        TOOL_TIMEOUT,
+        'browser_click'
+      )
+      return textResult(
+        args.dblClick
+          ? 'Successfully double clicked on the element'
+          : 'Successfully clicked on the element'
+      )
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to click element ${args.uid}: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to click element ${args.uid}: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_hover = tool(
   'browser_hover',
-  'Hover over an element to trigger hover effects or tooltips',
+  'Hover over the provided element',
   {
-    uid: z.string().describe('The unique ID of the element to hover over')
+    uid: z.string().describe('The uid of an element on the page from the page content snapshot')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
     }
 
     try {
-      await browserContext.hoverElement(args.uid)
-      return {
-        content: [{ type: 'text' as const, text: `Hovering over element: ${args.uid}` }]
-      }
+      await withTimeout(
+        browserContext.hoverElement(args.uid),
+        TOOL_TIMEOUT,
+        'browser_hover'
+      )
+      return textResult('Successfully hovered over the element')
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to hover element ${args.uid}: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to hover element ${args.uid}: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_fill = tool(
   'browser_fill',
-  'Fill an input field with the specified text (clears existing content first)',
+  'Type text into a input, text area or select an option from a <select> element.',
   {
-    uid: z.string().describe('The unique ID of the input element'),
-    value: z.string().describe('The text to enter into the input field')
+    uid: z.string().describe('The uid of an element on the page from the page content snapshot'),
+    value: z.string().describe('The value to fill in')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
     }
 
     try {
-      await browserContext.fillElement(args.uid, args.value)
-      return {
-        content: [{ type: 'text' as const, text: `Filled element ${args.uid} with: "${args.value}"` }]
-      }
+      await withTimeout(
+        fillFormElement(args.uid, args.value),
+        TOOL_TIMEOUT,
+        'browser_fill'
+      )
+      return textResult('Successfully filled out the element')
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to fill element ${args.uid}: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to fill element ${args.uid}: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_fill_form = tool(
   'browser_fill_form',
-  'Fill multiple form fields at once for more efficient form completion',
+  'Fill out multiple form elements at once',
   {
     elements: z.array(z.object({
-      uid: z.string().describe('Element UID'),
-      value: z.string().describe('Value to fill')
-    })).describe('Array of {uid, value} pairs to fill')
+      uid: z.string().describe('The uid of the element to fill out'),
+      value: z.string().describe('Value for the element')
+    })).describe('Elements from snapshot to fill out.')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
     }
 
-    const results: string[] = []
     const errors: string[] = []
 
     for (const elem of args.elements) {
       try {
-        await browserContext.fillElement(elem.uid, elem.value)
-        results.push(`${elem.uid}: "${elem.value}"`)
+        await withTimeout(
+          fillFormElement(elem.uid, elem.value),
+          TOOL_TIMEOUT,
+          'browser_fill_form'
+        )
       } catch (error) {
         errors.push(`${elem.uid}: ${(error as Error).message}`)
       }
     }
 
     if (errors.length > 0) {
-      return {
-        content: [{ type: 'text' as const, text: `Filled ${results.length} fields:\n${results.join('\n')}\n\nErrors:\n${errors.join('\n')}` }],
-        isError: errors.length === args.elements.length
-      }
+      return textResult(
+        `Partially filled out the form.\n\nErrors:\n${errors.join('\n')}`,
+        errors.length === args.elements.length
+      )
     }
 
-    return {
-      content: [{ type: 'text' as const, text: `Filled ${results.length} fields:\n${results.join('\n')}` }]
-    }
+    return textResult('Successfully filled out the form')
   }
 )
 
 const browser_drag = tool(
   'browser_drag',
-  'Drag an element from one position to another',
+  'Drag an element onto another element',
   {
-    from_uid: z.string().describe('The UID of the element to drag'),
-    to_uid: z.string().describe('The UID of the target element to drop onto')
+    from_uid: z.string().describe('The uid of the element to drag'),
+    to_uid: z.string().describe('The uid of the element to drop into')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
     }
 
     try {
-      await browserContext.dragElement(args.from_uid, args.to_uid)
-      return {
-        content: [{ type: 'text' as const, text: `Dragged element from ${args.from_uid} to ${args.to_uid}` }]
-      }
+      await withTimeout(
+        browserContext.dragElement(args.from_uid, args.to_uid),
+        TOOL_TIMEOUT,
+        'browser_drag'
+      )
+      return textResult('Successfully dragged an element')
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to drag: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to drag: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_press_key = tool(
   'browser_press_key',
-  'Press a keyboard key or key combination (e.g., "Enter", "Control+a", "Escape")',
+  'Press a key or key combination. Use this when other input methods like fill() cannot be used (e.g., keyboard shortcuts, navigation keys, or special key combinations).',
   {
-    key: z.string().describe('Key to press. Can include modifiers: "Control+a", "Shift+Tab", "Enter", etc.')
+    key: z.string().describe('A key or a combination (e.g., "Enter", "Control+A", "Control++", "Control+Shift+R"). Modifiers: Control, Shift, Alt, Meta')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
     }
 
     try {
-      await browserContext.pressKey(args.key)
-      return {
-        content: [{ type: 'text' as const, text: `Pressed key: ${args.key}` }]
-      }
+      await withTimeout(
+        browserContext.pressKey(args.key),
+        TOOL_TIMEOUT,
+        'browser_press_key'
+      )
+      return textResult(`Successfully pressed key: ${args.key}`)
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to press key: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to press key: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_upload_file = tool(
   'browser_upload_file',
-  'Upload a file to a file input element',
+  'Upload a file through a provided element.',
   {
-    uid: z.string().describe('The UID of the file input element'),
-    filePath: z.string().describe('Absolute path to the file to upload')
+    uid: z.string().describe('The uid of the file input element or an element that will open file chooser on the page from the page content snapshot'),
+    filePath: z.string().describe('The local path of the file to upload')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
     }
 
     try {
@@ -432,492 +500,729 @@ const browser_upload_file = tool(
         throw new Error(`Element not found: ${args.uid}`)
       }
 
-      await browserContext.sendCDPCommand('DOM.setFileInputFiles', {
-        backendNodeId: element.backendNodeId,
-        files: [args.filePath]
-      })
+      await withTimeout(
+        browserContext.sendCDPCommand('DOM.setFileInputFiles', {
+          backendNodeId: element.backendNodeId,
+          files: [args.filePath]
+        }),
+        TOOL_TIMEOUT,
+        'browser_upload_file'
+      )
 
-      return {
-        content: [{ type: 'text' as const, text: `Uploaded file to ${args.uid}: ${args.filePath}` }]
-      }
+      return textResult(`File uploaded from ${args.filePath}.`)
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to upload file: ${(error as Error).message}` }],
-        isError: true
-      }
-    }
-  }
-)
-
-const browser_handle_dialog = tool(
-  'browser_handle_dialog',
-  'Handle a browser dialog by accepting or dismissing it',
-  {
-    action: z.enum(['accept', 'dismiss']).describe('Action to take'),
-    promptText: z.string().optional().describe('Text to enter for prompt dialogs (optional)')
-  },
-  async (args) => {
-    const dialog = browserContext.getPendingDialog()
-    if (!dialog) {
-      return {
-        content: [{ type: 'text' as const, text: 'No dialog is currently open.' }],
-        isError: true
-      }
-    }
-
-    try {
-      await browserContext.handleDialog(args.action === 'accept', args.promptText)
-      return {
-        content: [{ type: 'text' as const, text: `${args.action === 'accept' ? 'Accepted' : 'Dismissed'} ${dialog.type} dialog: "${dialog.message}"` }]
-      }
-    } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to handle dialog: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to upload file: ${(error as Error).message}`, true)
     }
   }
 )
 
 // ============================================
-// Snapshot Tools
+// Snapshot Tools (3 tools)
 // ============================================
 
 const browser_snapshot = tool(
   'browser_snapshot',
-  `Get the accessibility tree of the current page. Returns a structured text representation of all interactive elements with unique IDs (uid) that can be used with other tools like click, fill, etc.
-
-IMPORTANT: Always use this tool after navigation or interactions to get the latest page state. Element UIDs change after page updates.`,
+  `Take a text snapshot of the currently selected page based on the a11y tree. The snapshot lists page elements along with a unique
+identifier (uid). Always use the latest snapshot. Prefer taking a snapshot over taking a screenshot. The snapshot indicates the element selected
+in the DevTools Elements panel (if any).`,
   {
-    verbose: z.boolean().optional().describe('Include more details like descriptions (default: false)'),
-    filePath: z.string().optional().describe('Optional: Save snapshot to a file instead of returning it')
+    verbose: z.boolean().optional().describe('Whether to include all possible information available in the full a11y tree. Default is false.'),
+    filePath: z.string().optional().describe('The absolute path, or a path relative to the current working directory, to save the snapshot to instead of attaching it to the response.')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page. Use browser_new_page first.' }],
-        isError: true
-      }
+      return textResult('No active browser page. Use browser_new_page first.', true)
     }
 
     try {
-      const snapshot = await browserContext.createSnapshot(args.verbose || false)
+      const snapshot = await withTimeout(
+        browserContext.createSnapshot(args.verbose || false),
+        TOOL_TIMEOUT,
+        'browser_snapshot'
+      )
       const formatted = snapshot.format(args.verbose || false)
 
       if (args.filePath) {
         const { writeFileSync } = require('fs')
         writeFileSync(args.filePath, formatted, 'utf-8')
-        return {
-          content: [{ type: 'text' as const, text: `Snapshot saved to: ${args.filePath}\n\nPage: ${snapshot.title}\nURL: ${snapshot.url}\nElements: ${snapshot.idToNode.size}` }]
-        }
+        return textResult(`Snapshot saved to: ${args.filePath}\n\nPage: ${snapshot.title}\nURL: ${snapshot.url}\nElements: ${snapshot.idToNode.size}`)
       }
 
-      return {
-        content: [{ type: 'text' as const, text: formatted }]
-      }
+      return textResult(formatted)
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to take snapshot: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to take snapshot: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_screenshot = tool(
   'browser_screenshot',
-  `Take a screenshot of the current page or a specific element. Returns the image as base64 data.`,
+  'Take a screenshot of the page or element.',
   {
-    format: z.enum(['png', 'jpeg']).optional().describe('Image format (default: "png")'),
-    quality: z.number().optional().describe('JPEG quality 0-100 (default: 80)'),
-    uid: z.string().optional().describe('Optional: Capture only a specific element by its UID'),
-    fullPage: z.boolean().optional().describe('Capture the full scrollable page (default: false)'),
-    filePath: z.string().optional().describe('Optional: Save screenshot to a file')
+    format: z.enum(['png', 'jpeg', 'webp']).optional().describe('Type of format to save the screenshot as. Default is "png"'),
+    quality: z.number().optional().describe('Compression quality for JPEG and WebP formats (0-100). Ignored for PNG format.'),
+    uid: z.string().optional().describe('The uid of an element on the page from the page content snapshot. If omitted takes a pages screenshot.'),
+    fullPage: z.boolean().optional().describe('If set to true takes a screenshot of the full page instead of the currently visible viewport. Incompatible with uid.'),
+    filePath: z.string().optional().describe('The absolute path, or a path relative to the current working directory, to save the screenshot to instead of attaching it to the response.')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
+    }
+
+    if (args.uid && args.fullPage) {
+      return textResult('Providing both "uid" and "fullPage" is not allowed.', true)
     }
 
     try {
-      const result = await browserContext.captureScreenshot({
-        format: args.format || 'png',
-        quality: args.quality,
-        uid: args.uid,
-        fullPage: args.fullPage || false
-      })
+      const format = args.format || 'png'
+      const result = await withTimeout(
+        browserContext.captureScreenshot({
+          format,
+          quality: format === 'png' ? undefined : args.quality,
+          uid: args.uid,
+          fullPage: args.fullPage || false
+        }),
+        TOOL_TIMEOUT,
+        'browser_screenshot'
+      )
+
+      let message: string
+      if (args.uid) {
+        message = `Took a screenshot of node with uid "${args.uid}".`
+      } else if (args.fullPage) {
+        message = 'Took a screenshot of the full current page.'
+      } else {
+        message = "Took a screenshot of the current page's viewport."
+      }
 
       if (args.filePath) {
         const { writeFileSync } = require('fs')
         const buffer = Buffer.from(result.data, 'base64')
         writeFileSync(args.filePath, buffer)
-        return {
-          content: [{ type: 'text' as const, text: `Screenshot saved to: ${args.filePath}` }]
-        }
+        return textResult(`${message}\nSaved screenshot to ${args.filePath}.`)
       }
 
-      // Return with image data
-      return {
-        content: [
-          { type: 'text' as const, text: `Screenshot captured (${args.format || 'png'}${args.uid ? `, element: ${args.uid}` : ''}${args.fullPage ? ', full page' : ''})` },
-          { type: 'image' as const, data: result.data, mimeType: result.mimeType }
-        ]
-      }
+      return imageResult(message, result.data, result.mimeType)
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to take screenshot: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to take screenshot: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_evaluate = tool(
   'browser_evaluate',
-  `Execute JavaScript code in the browser context. Returns the result of the evaluation.`,
+  `Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON
+so returned values have to JSON-serializable.`,
   {
-    script: z.string().describe('JavaScript code or function to execute'),
-    args: z.array(z.any()).optional().describe('Optional: Arguments to pass to the function')
+    function: z.string().describe(`A JavaScript function declaration to be executed by the tool in the currently selected page.
+Example without arguments: \`() => {
+  return document.title
+}\` or \`async () => {
+  return await fetch("example.com")
+}\`.
+Example with arguments: \`(el) => {
+  return el.innerText;
+}\`
+`),
+    args: z.array(z.object({
+      uid: z.string().describe('The uid of an element on the page from the page content snapshot')
+    })).optional().describe('An optional list of arguments to pass to the function.')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
     }
 
     try {
-      const result = await browserContext.evaluateScript(args.script, args.args)
+      const elementArgs: unknown[] = []
+      if (args.args && args.args.length > 0) {
+        for (const arg of args.args) {
+          const element = browserContext.getElementByUid(arg.uid)
+          if (!element) {
+            throw new Error(`Element not found: ${arg.uid}`)
+          }
+          elementArgs.push(element)
+        }
+      }
+
+      const result = await withTimeout(
+        browserContext.evaluateScript(args.function, elementArgs),
+        TOOL_TIMEOUT,
+        'browser_evaluate'
+      )
       const resultStr = typeof result === 'object'
         ? JSON.stringify(result, null, 2)
         : String(result)
 
-      return {
-        content: [{ type: 'text' as const, text: `Script result:\n${resultStr}` }]
-      }
+      return textResult(`Script ran on page and returned:\n\`\`\`json\n${resultStr}\n\`\`\``)
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Script error: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Script error: ${(error as Error).message}`, true)
     }
   }
 )
 
 // ============================================
-// Network Tools
+// Network Tools (2 tools)
 // ============================================
+
+const FILTERABLE_RESOURCE_TYPES = [
+  'document', 'stylesheet', 'image', 'media', 'font', 'script',
+  'texttrack', 'xhr', 'fetch', 'prefetch', 'eventsource', 'websocket',
+  'manifest', 'signedexchange', 'ping', 'cspviolationreport', 'preflight',
+  'fedcm', 'other'
+] as const
 
 const browser_network_requests = tool(
   'browser_network_requests',
-  'Get a list of recent network requests made by the page',
+  'List all requests for the currently selected page since the last navigation.',
   {
-    filter: z.object({
-      url: z.string().optional().describe('Filter by URL pattern'),
-      method: z.string().optional().describe('Filter by HTTP method'),
-      resourceType: z.string().optional().describe('Filter by resource type'),
-      hasResponse: z.boolean().optional().describe('Only include requests with responses')
-    }).optional().describe('Optional filters'),
-    limit: z.number().optional().describe('Maximum number of requests to return (default: 50)')
+    pageSize: z.number().int().positive().optional().describe('Maximum number of requests to return. When omitted, returns all requests.'),
+    pageIdx: z.number().int().min(0).optional().describe('Page number to return (0-based). When omitted, returns the first page.'),
+    resourceTypes: z.array(z.string()).optional().describe('Filter requests to only return requests of the specified resource types. When omitted or empty, returns all requests.'),
+    includePreservedRequests: z.boolean().optional().describe('Set to true to return the preserved requests over the last 3 navigations.')
   },
   async (args) => {
     try {
-      const requests = browserContext.getNetworkRequests(args.filter || {}, args.limit || 50)
+      let requests = browserContext.getNetworkRequests(args.includePreservedRequests || false)
 
-      if (requests.length === 0) {
-        return {
-          content: [{ type: 'text' as const, text: 'No network requests captured.' }]
-        }
+      // Filter by resource type
+      if (args.resourceTypes && args.resourceTypes.length > 0) {
+        const types = new Set(args.resourceTypes.map(t => t.toLowerCase()))
+        requests = requests.filter(r => types.has(r.resourceType.toLowerCase()))
       }
 
-      const lines = ['Recent network requests:']
-      requests.forEach((req, index) => {
-        lines.push(`[${index}] ${req.method} ${req.url}`)
-        if (req.status) {
-          lines.push(`    Status: ${req.status}`)
-        }
-      })
+      const total = requests.length
 
-      return {
-        content: [{ type: 'text' as const, text: lines.join('\n') }]
+      // Pagination
+      const pageIdx = args.pageIdx || 0
+      let pageRequests: typeof requests
+      if (args.pageSize !== undefined) {
+        const startIdx = pageIdx * args.pageSize
+        const endIdx = Math.min(startIdx + args.pageSize, total)
+        pageRequests = requests.slice(startIdx, endIdx)
+      } else {
+        pageRequests = requests
       }
+
+      if (pageRequests.length === 0) {
+        return textResult('No network requests captured.')
+      }
+
+      const lines: string[] = []
+      if (args.pageSize !== undefined) {
+        const startIdx = pageIdx * args.pageSize
+        const endIdx = Math.min(startIdx + args.pageSize, total)
+        lines.push(`Network Requests (${startIdx + 1}-${endIdx} of ${total}):`)
+      } else {
+        lines.push(`Network Requests (${total} total):`)
+      }
+      lines.push('')
+
+      for (const req of pageRequests) {
+        const status = req.status ? `${req.status}` : 'pending'
+        const duration = req.timing?.duration ? `${req.timing.duration}ms` : '-'
+        lines.push(`[reqid=${req.id}] ${req.method} ${status} ${req.resourceType}`)
+        lines.push(`    URL: ${req.url.substring(0, 100)}${req.url.length > 100 ? '...' : ''}`)
+        lines.push(`    Duration: ${duration}`)
+        if (req.error) {
+          lines.push(`    Error: ${req.error}`)
+        }
+        lines.push('')
+      }
+
+      if (args.pageSize !== undefined && pageIdx * args.pageSize + pageRequests.length < total) {
+        lines.push(`Use pageIdx=${pageIdx + 1} to see more requests.`)
+      }
+
+      return textResult(lines.join('\n'))
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to get network requests: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to get network requests: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_network_request = tool(
   'browser_network_request',
-  'Get details of a specific network request by index',
+  'Gets a network request by an optional reqid, if omitted returns the currently selected request in the DevTools Network panel.',
   {
-    index: z.number().describe('Index of the request (from network_requests output)')
+    reqid: z.number().optional().describe('The reqid of the network request.')
   },
   async (args) => {
     try {
-      const requests = browserContext.getNetworkRequests({}, 100)
+      let request
 
-      if (args.index < 0 || args.index >= requests.length) {
-        return {
-          content: [{ type: 'text' as const, text: `Invalid request index: ${args.index}` }],
-          isError: true
+      if (args.reqid !== undefined) {
+        request = browserContext.getNetworkRequest(String(args.reqid))
+      } else {
+        const selectedReq = (browserContext as any).getSelectedNetworkRequest?.()
+        if (!selectedReq) {
+          return textResult('Nothing is currently selected in the DevTools Network panel.')
         }
+        request = selectedReq
       }
 
-      const req = requests[args.index]
-      const details = [
-        `URL: ${req.url}`,
-        `Method: ${req.method}`,
-        `Status: ${req.status || 'pending'}`,
-        `Type: ${req.resourceType || 'unknown'}`,
+      if (!request) {
+        return textResult(`Request not found: ${args.reqid}`, true)
+      }
+
+      const lines = [
+        `# Network Request: reqid=${request.id}`,
         '',
-        'Request Headers:',
-        ...Object.entries(req.requestHeaders || {}).map(([k, v]) => `  ${k}: ${v}`),
-        '',
-        'Response Headers:',
-        ...Object.entries(req.responseHeaders || {}).map(([k, v]) => `  ${k}: ${v}`)
+        `## Basic Info`,
+        `URL: ${request.url}`,
+        `Method: ${request.method}`,
+        `Resource Type: ${request.resourceType}`,
+        `Status: ${request.status || 'pending'} ${request.statusText || ''}`,
+        `MIME Type: ${request.mimeType || 'unknown'}`,
+        ''
       ]
 
-      return {
-        content: [{ type: 'text' as const, text: details.join('\n') }]
+      if (request.timing) {
+        lines.push(`## Timing`)
+        lines.push(`Duration: ${request.timing.duration}ms`)
+        lines.push('')
       }
+
+      if (request.requestHeaders && Object.keys(request.requestHeaders).length > 0) {
+        lines.push(`## Request Headers`)
+        for (const [key, value] of Object.entries(request.requestHeaders)) {
+          lines.push(`${key}: ${value}`)
+        }
+        lines.push('')
+      }
+
+      if (request.responseHeaders && Object.keys(request.responseHeaders).length > 0) {
+        lines.push(`## Response Headers`)
+        for (const [key, value] of Object.entries(request.responseHeaders)) {
+          lines.push(`${key}: ${value}`)
+        }
+        lines.push('')
+      }
+
+      if (request.requestBody) {
+        lines.push(`## Request Body`)
+        lines.push('```')
+        lines.push(request.requestBody.substring(0, 2000))
+        if (request.requestBody.length > 2000) {
+          lines.push('... (truncated)')
+        }
+        lines.push('```')
+        lines.push('')
+      }
+
+      if (request.error) {
+        lines.push(`## Error`)
+        lines.push(request.error)
+      }
+
+      return textResult(lines.join('\n'))
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to get request details: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to get request details: ${(error as Error).message}`, true)
     }
   }
 )
 
 // ============================================
-// Console Tools
+// Console Tools (2 tools)
 // ============================================
 
 const browser_console = tool(
   'browser_console',
-  'Get browser console messages (log, warn, error, etc.)',
+  'List all console messages for the currently selected page since the last navigation.',
   {
-    level: z.enum(['all', 'log', 'info', 'warn', 'error']).optional().describe('Filter by log level (default: all)'),
-    limit: z.number().optional().describe('Maximum number of messages (default: 50)')
+    pageSize: z.number().int().positive().optional().describe('Maximum number of messages to return. When omitted, returns all messages.'),
+    pageIdx: z.number().int().min(0).optional().describe('Page number to return (0-based). When omitted, returns the first page.'),
+    types: z.array(z.string()).optional().describe('Filter messages to only return messages of the specified types. When omitted or empty, returns all messages.'),
+    includePreservedMessages: z.boolean().optional().describe('Set to true to return the preserved messages over the last 3 navigations.')
   },
   async (args) => {
     try {
-      const messages = browserContext.getConsoleMessages(args.level || 'all', args.limit || 50)
+      let messages = browserContext.getConsoleMessages(args.includePreservedMessages || false)
 
-      if (messages.length === 0) {
-        return {
-          content: [{ type: 'text' as const, text: 'No console messages captured.' }]
+      // Filter by type
+      if (args.types && args.types.length > 0) {
+        const typeSet = new Set(args.types)
+        messages = messages.filter(m => typeSet.has(m.type))
+      }
+
+      const total = messages.length
+
+      // Pagination
+      const pageIdx = args.pageIdx || 0
+      let pageMessages: typeof messages
+      if (args.pageSize !== undefined) {
+        const startIdx = pageIdx * args.pageSize
+        const endIdx = Math.min(startIdx + args.pageSize, total)
+        pageMessages = messages.slice(startIdx, endIdx)
+      } else {
+        pageMessages = messages
+      }
+
+      if (pageMessages.length === 0) {
+        return textResult('No console messages captured.')
+      }
+
+      const lines: string[] = []
+      if (args.pageSize !== undefined) {
+        const startIdx = pageIdx * args.pageSize
+        const endIdx = Math.min(startIdx + args.pageSize, total)
+        lines.push(`Console Messages (${startIdx + 1}-${endIdx} of ${total}):`)
+      } else {
+        lines.push(`Console Messages (${total} total):`)
+      }
+      lines.push('')
+
+      for (const msg of pageMessages) {
+        const time = new Date(msg.timestamp).toLocaleTimeString()
+        lines.push(`[msgid=${msg.id}] ${msg.type.toUpperCase()} (${time})`)
+        lines.push(`    ${msg.text.substring(0, 200)}${msg.text.length > 200 ? '...' : ''}`)
+        if (msg.url) {
+          lines.push(`    at ${msg.url}${msg.lineNumber !== undefined ? `:${msg.lineNumber}` : ''}`)
         }
+        lines.push('')
       }
 
-      const lines = ['Console messages:']
-      messages.forEach((msg, index) => {
-        lines.push(`[${msg.level.toUpperCase()}] ${msg.text}`)
-      })
-
-      return {
-        content: [{ type: 'text' as const, text: lines.join('\n') }]
+      if (args.pageSize !== undefined && pageIdx * args.pageSize + pageMessages.length < total) {
+        lines.push(`Use pageIdx=${pageIdx + 1} to see more messages.`)
       }
+
+      return textResult(lines.join('\n'))
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to get console messages: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to get console messages: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_console_message = tool(
   'browser_console_message',
-  'Get details of a specific console message by index',
+  'Gets a console message by its ID. You can get all messages by calling browser_console.',
   {
-    index: z.number().describe('Index of the message')
+    msgid: z.number().describe('The msgid of a console message on the page from the listed console messages')
   },
   async (args) => {
     try {
-      const messages = browserContext.getConsoleMessages('all', 100)
+      const message = browserContext.getConsoleMessage(String(args.msgid))
 
-      if (args.index < 0 || args.index >= messages.length) {
-        return {
-          content: [{ type: 'text' as const, text: `Invalid message index: ${args.index}` }],
-          isError: true
-        }
+      if (!message) {
+        return textResult(`Message not found: ${args.msgid}`, true)
       }
 
-      const msg = messages[args.index]
-      const details = [
-        `Level: ${msg.level}`,
-        `Text: ${msg.text}`,
-        `Source: ${msg.source || 'unknown'}`,
-        `Line: ${msg.line || 'unknown'}`,
-        `Column: ${msg.column || 'unknown'}`
+      const time = new Date(message.timestamp).toLocaleString()
+
+      const lines = [
+        `# Console Message: msgid=${message.id}`,
+        '',
+        `## Type: ${message.type.toUpperCase()}`,
+        `Timestamp: ${time}`,
+        ''
       ]
 
-      return {
-        content: [{ type: 'text' as const, text: details.join('\n') }]
+      if (message.url) {
+        lines.push(`## Source`)
+        lines.push(`File: ${message.url}`)
+        if (message.lineNumber !== undefined) {
+          lines.push(`Line: ${message.lineNumber}`)
+        }
+        lines.push('')
       }
+
+      lines.push(`## Message`)
+      lines.push('```')
+      lines.push(message.text)
+      lines.push('```')
+
+      if (message.stackTrace) {
+        lines.push('')
+        lines.push(`## Stack Trace`)
+        lines.push('```')
+        lines.push(message.stackTrace)
+        lines.push('```')
+      }
+
+      if (message.args && message.args.length > 0) {
+        lines.push('')
+        lines.push(`## Arguments`)
+        lines.push('```json')
+        lines.push(JSON.stringify(message.args, null, 2))
+        lines.push('```')
+      }
+
+      return textResult(lines.join('\n'))
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to get message details: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to get message details: ${(error as Error).message}`, true)
     }
   }
 )
 
 // ============================================
-// Emulation Tools
+// Emulation Tools (1 tool)
 // ============================================
+
+const NETWORK_CONDITIONS: Record<string, { download: number; upload: number; latency: number }> = {
+  'Slow 3G': { download: 500 * 1024 / 8, upload: 500 * 1024 / 8, latency: 400 },
+  'Fast 3G': { download: 1.6 * 1024 * 1024 / 8, upload: 750 * 1024 / 8, latency: 150 },
+  'Regular 4G': { download: 4 * 1024 * 1024 / 8, upload: 3 * 1024 * 1024 / 8, latency: 20 },
+  'DSL': { download: 2 * 1024 * 1024 / 8, upload: 1 * 1024 * 1024 / 8, latency: 5 },
+  'WiFi': { download: 30 * 1024 * 1024 / 8, upload: 15 * 1024 * 1024 / 8, latency: 2 }
+}
 
 const browser_emulate = tool(
   'browser_emulate',
-  'Emulate a device or network condition',
+  'Emulates various features on the selected page.',
   {
-    device: z.string().optional().describe('Device to emulate (e.g., "iPhone 12", "iPad Pro")'),
-    userAgent: z.string().optional().describe('Custom user agent string'),
-    viewport: z.object({
-      width: z.number(),
-      height: z.number()
-    }).optional().describe('Custom viewport size'),
-    offline: z.boolean().optional().describe('Enable offline mode'),
-    latency: z.number().optional().describe('Network latency in ms'),
-    downloadThroughput: z.number().optional().describe('Download speed in bytes/s'),
-    uploadThroughput: z.number().optional().describe('Upload speed in bytes/s')
+    networkConditions: z.enum([
+      'No emulation', 'Offline', 'Slow 3G', 'Fast 3G', 'Regular 4G', 'DSL', 'WiFi'
+    ]).optional().describe('Throttle network. Set to "No emulation" to disable. If omitted, conditions remain unchanged.'),
+    cpuThrottlingRate: z.number().min(1).max(20).optional().describe('Represents the CPU slowdown factor. Set the rate to 1 to disable throttling. If omitted, throttling remains unchanged.'),
+    geolocation: z.object({
+      latitude: z.number().min(-90).max(90).describe('Latitude between -90 and 90.'),
+      longitude: z.number().min(-180).max(180).describe('Longitude between -180 and 180.')
+    }).nullable().optional().describe('Geolocation to emulate. Set to null to clear the geolocation override.')
   },
   async (args) => {
     if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
+      return textResult('No active browser page.', true)
     }
+
+    const results: string[] = []
 
     try {
-      await browserContext.setEmulation(args)
-      const settings = []
-      if (args.device) settings.push(`Device: ${args.device}`)
-      if (args.viewport) settings.push(`Viewport: ${args.viewport.width}x${args.viewport.height}`)
-      if (args.offline) settings.push('Offline mode enabled')
-      if (args.latency) settings.push(`Latency: ${args.latency}ms`)
-
-      return {
-        content: [{ type: 'text' as const, text: `Emulation settings applied:\n${settings.join('\n') || 'Default'}` }]
+      // Network conditions
+      if (args.networkConditions !== undefined) {
+        if (args.networkConditions === 'No emulation') {
+          await browserContext.sendCDPCommand('Network.emulateNetworkConditions', {
+            offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1
+          })
+          results.push('Network: No emulation')
+        } else if (args.networkConditions === 'Offline') {
+          await browserContext.sendCDPCommand('Network.emulateNetworkConditions', {
+            offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0
+          })
+          results.push('Network: Offline')
+        } else if (args.networkConditions in NETWORK_CONDITIONS) {
+          const cond = NETWORK_CONDITIONS[args.networkConditions]
+          await browserContext.sendCDPCommand('Network.emulateNetworkConditions', {
+            offline: false, latency: cond.latency,
+            downloadThroughput: cond.download, uploadThroughput: cond.upload
+          })
+          results.push(`Network: ${args.networkConditions}`)
+        }
       }
+
+      // CPU throttling
+      if (args.cpuThrottlingRate !== undefined) {
+        await browserContext.sendCDPCommand('Emulation.setCPUThrottlingRate', {
+          rate: args.cpuThrottlingRate
+        })
+        results.push(`CPU throttling: ${args.cpuThrottlingRate}x`)
+      }
+
+      // Geolocation
+      if (args.geolocation !== undefined) {
+        if (args.geolocation === null) {
+          await browserContext.sendCDPCommand('Emulation.clearGeolocationOverride')
+          results.push('Geolocation: cleared')
+        } else {
+          await browserContext.sendCDPCommand('Emulation.setGeolocationOverride', {
+            latitude: args.geolocation.latitude,
+            longitude: args.geolocation.longitude,
+            accuracy: 100
+          })
+          results.push(`Geolocation: ${args.geolocation.latitude}, ${args.geolocation.longitude}`)
+        }
+      }
+
+      if (results.length === 0) {
+        return textResult('No emulation settings changed.')
+      }
+
+      return textResult(results.join('\n'))
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to set emulation: ${(error as Error).message}` }],
-        isError: true
-      }
-    }
-  }
-)
-
-const browser_resize = tool(
-  'browser_resize',
-  'Resize the browser viewport',
-  {
-    width: z.number().describe('New viewport width'),
-    height: z.number().describe('New viewport height')
-  },
-  async (args) => {
-    if (!browserContext.getActiveViewId()) {
-      return {
-        content: [{ type: 'text' as const, text: 'No active browser page.' }],
-        isError: true
-      }
-    }
-
-    try {
-      await browserContext.setViewportSize(args.width, args.height)
-      return {
-        content: [{ type: 'text' as const, text: `Viewport resized to ${args.width}x${args.height}` }]
-      }
-    } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to resize: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Emulation failed: ${(error as Error).message}`, true)
     }
   }
 )
 
 // ============================================
-// Performance Tools
+// Performance Tools (3 tools)
 // ============================================
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
+function formatTraceResults(duration: number, metrics: Record<string, number>): string {
+  const lines = [
+    'The performance trace has been stopped.',
+    '',
+    '## Trace Summary',
+    `Duration: ${duration}ms`,
+    '',
+    '## Core Metrics'
+  ]
+
+  if (metrics.JSHeapUsedSize) lines.push(`JS Heap Used: ${formatBytes(metrics.JSHeapUsedSize)}`)
+  if (metrics.JSHeapTotalSize) lines.push(`JS Heap Total: ${formatBytes(metrics.JSHeapTotalSize)}`)
+  if (metrics.Nodes) lines.push(`DOM Nodes: ${metrics.Nodes}`)
+  if (metrics.Documents) lines.push(`Documents: ${metrics.Documents}`)
+  if (metrics.LayoutCount) lines.push(`Layout Count: ${metrics.LayoutCount}`)
+  if (metrics.LayoutDuration) lines.push(`Layout Duration: ${(metrics.LayoutDuration * 1000).toFixed(2)}ms`)
+  if (metrics.RecalcStyleCount) lines.push(`Recalc Style Count: ${metrics.RecalcStyleCount}`)
+  if (metrics.ScriptDuration) lines.push(`Script Duration: ${(metrics.ScriptDuration * 1000).toFixed(2)}ms`)
+  if (metrics.TaskDuration) lines.push(`Task Duration: ${(metrics.TaskDuration * 1000).toFixed(2)}ms`)
+
+  lines.push('')
+  lines.push('## Available Insight Sets')
+  lines.push('Use browser_perf_insight with these insight sets:')
+  lines.push('- insightSetId: "main", available insights: DocumentLatency, LCPBreakdown, RenderBlocking')
+
+  return lines.join('\n')
+}
 
 const browser_perf_start = tool(
   'browser_perf_start',
-  'Start collecting performance metrics',
-  {},
-  async () => {
+  'Starts a performance trace recording on the selected page. This can be used to look for performance problems and insights to improve the performance of the page. It will also report Core Web Vital (CWV) scores for the page.',
+  {
+    reload: z.boolean().describe('Determines if, once tracing has started, the page should be automatically reloaded.'),
+    autoStop: z.boolean().describe('Determines if the trace recording should be automatically stopped.')
+  },
+  async (args) => {
+    const viewId = browserContext.getActiveViewId()
+    if (!viewId) {
+      return textResult('No active browser page.', true)
+    }
+
+    if (browserContext.isPerformanceTracing()) {
+      return textResult(
+        'Error: a performance trace is already running. Use browser_perf_stop to stop it. Only one trace can be running at any given time.',
+        true
+      )
+    }
+
     try {
-      await browserContext.startPerformanceMetrics()
-      return {
-        content: [{ type: 'text' as const, text: 'Performance metrics collection started.' }]
+      if (args.reload) {
+        const currentUrl = browserContext.getPageUrl()
+        await browserViewManager.navigate(viewId, 'about:blank')
+        await new Promise(resolve => setTimeout(resolve, 500))
+
+        await browserContext.startPerformanceTrace()
+
+        await browserViewManager.navigate(viewId, currentUrl)
+        await browserContext.waitForNavigation(NAV_TIMEOUT)
+      } else {
+        await browserContext.startPerformanceTrace()
       }
+
+      if (args.autoStop) {
+        await new Promise(resolve => setTimeout(resolve, 5000))
+
+        const { duration, metrics } = await browserContext.stopPerformanceTrace()
+        return textResult(formatTraceResults(duration, metrics))
+      }
+
+      return textResult('The performance trace is being recorded. Use browser_perf_stop to stop it.')
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to start performance metrics: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to start trace: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_perf_stop = tool(
   'browser_perf_stop',
-  'Stop collecting performance metrics and return results',
+  'Stops the active performance trace recording on the selected page.',
   {},
   async () => {
+    if (!browserContext.getActiveViewId()) {
+      return textResult('No active browser page.', true)
+    }
+
+    if (!browserContext.isPerformanceTracing()) {
+      return textResult('No performance trace is running.')
+    }
+
     try {
-      const metrics = await browserContext.stopPerformanceMetrics()
-      const lines = ['Performance Metrics:']
-      for (const [key, value] of Object.entries(metrics)) {
-        lines.push(`  ${key}: ${value}`)
-      }
-      return {
-        content: [{ type: 'text' as const, text: lines.join('\n') }]
-      }
+      const { duration, metrics } = await browserContext.stopPerformanceTrace()
+      return textResult(formatTraceResults(duration, metrics))
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to stop performance metrics: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to stop trace: ${(error as Error).message}`, true)
     }
   }
 )
 
 const browser_perf_insight = tool(
   'browser_perf_insight',
-  'Get Web Vitals and performance insights',
-  {},
-  async () => {
+  'Provides more detailed information on a specific Performance Insight of an insight set that was highlighted in the results of a trace recording.',
+  {
+    insightSetId: z.string().describe('The id for the specific insight set. Only use the ids given in the "Available insight sets" list.'),
+    insightName: z.string().describe('The name of the Insight you want more information on. For example: "DocumentLatency" or "LCPBreakdown"')
+  },
+  async (args) => {
+    if (!browserContext.getActiveViewId()) {
+      return textResult('No active browser page.', true)
+    }
+
     try {
-      const insights = await browserContext.getPerformanceInsights()
-      const lines = ['Performance Insights:']
+      const metrics = await browserContext.getPerformanceMetrics()
 
-      if (insights.lcp) lines.push(`  LCP (Largest Contentful Paint): ${insights.lcp}ms`)
-      if (insights.fid) lines.push(`  FID (First Input Delay): ${insights.fid}ms`)
-      if (insights.cls) lines.push(`  CLS (Cumulative Layout Shift): ${insights.cls}`)
-      if (insights.ttfb) lines.push(`  TTFB (Time to First Byte): ${insights.ttfb}ms`)
-      if (insights.fcp) lines.push(`  FCP (First Contentful Paint): ${insights.fcp}ms`)
+      const lines: string[] = [
+        `# Performance Insight: ${args.insightName}`,
+        `Insight Set: ${args.insightSetId}`,
+        ''
+      ]
 
-      return {
-        content: [{ type: 'text' as const, text: lines.join('\n') }]
+      switch (args.insightName.toLowerCase()) {
+        case 'documentlatency':
+          lines.push('## Document Latency Analysis')
+          lines.push(`Task Duration: ${(metrics.TaskDuration * 1000).toFixed(2)}ms`)
+          lines.push(`Script Duration: ${(metrics.ScriptDuration * 1000).toFixed(2)}ms`)
+          if (metrics.TaskDuration > 0.05) {
+            lines.push('')
+            lines.push('Long tasks detected. Consider:')
+            lines.push('- Breaking up long-running JavaScript')
+            lines.push('- Using requestIdleCallback for non-urgent work')
+            lines.push('- Web Workers for heavy computation')
+          }
+          break
+
+        case 'lcpbreakdown':
+          lines.push('## LCP (Largest Contentful Paint) Breakdown')
+          lines.push(`Layout Count: ${metrics.LayoutCount}`)
+          lines.push(`Layout Duration: ${(metrics.LayoutDuration * 1000).toFixed(2)}ms`)
+          lines.push(`Recalc Style Count: ${metrics.RecalcStyleCount}`)
+          lines.push('')
+          lines.push('Recommendations:')
+          lines.push('- Optimize critical rendering path')
+          lines.push('- Preload LCP resources')
+          lines.push('- Reduce render-blocking resources')
+          break
+
+        case 'renderblocking':
+          lines.push('## Render Blocking Resources')
+          lines.push(`Documents: ${metrics.Documents}`)
+          lines.push(`Frames: ${metrics.Frames}`)
+          lines.push('')
+          lines.push('Recommendations:')
+          lines.push('- Use async/defer for scripts')
+          lines.push('- Inline critical CSS')
+          lines.push('- Preconnect to required origins')
+          break
+
+        default:
+          lines.push('## General Performance Metrics')
+          lines.push(`JS Heap Used: ${formatBytes(metrics.JSHeapUsedSize)}`)
+          lines.push(`JS Heap Total: ${formatBytes(metrics.JSHeapTotalSize)}`)
+          lines.push(`DOM Nodes: ${metrics.Nodes}`)
+          lines.push(`Layout Count: ${metrics.LayoutCount}`)
+          lines.push(`Script Duration: ${(metrics.ScriptDuration * 1000).toFixed(2)}ms`)
       }
+
+      return textResult(lines.join('\n'))
     } catch (error) {
-      return {
-        content: [{ type: 'text' as const, text: `Failed to get performance insights: ${(error as Error).message}` }],
-        isError: true
-      }
+      return textResult(`Failed to analyze insight: ${(error as Error).message}`, true)
     }
   }
 )
@@ -927,17 +1232,19 @@ const browser_perf_insight = tool(
 // ============================================
 
 /**
- * All AI Browser tools as SDK MCP tools
+ * All AI Browser tools as SDK MCP tools (26 tools)
  */
 const allSdkTools = [
-  // Navigation (6)
+  // Navigation (8)
   browser_list_pages,
   browser_select_page,
   browser_new_page,
   browser_close_page,
   browser_navigate,
   browser_wait_for,
-  // Input (8)
+  browser_resize,
+  browser_handle_dialog,
+  // Input (7)
   browser_click,
   browser_hover,
   browser_fill,
@@ -945,7 +1252,6 @@ const allSdkTools = [
   browser_drag,
   browser_press_key,
   browser_upload_file,
-  browser_handle_dialog,
   // Snapshot (3)
   browser_snapshot,
   browser_screenshot,
@@ -956,9 +1262,8 @@ const allSdkTools = [
   // Console (2)
   browser_console,
   browser_console_message,
-  // Emulation (2)
+  // Emulation (1)
   browser_emulate,
-  browser_resize,
   // Performance (3)
   browser_perf_start,
   browser_perf_stop,

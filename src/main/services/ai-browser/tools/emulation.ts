@@ -3,6 +3,10 @@
  *
  * Tools for emulating different devices, network conditions, and geolocation.
  * Tool descriptions aligned with chrome-devtools-mcp for 100% compatibility.
+ *
+ * WARNING: This file is DEAD CODE. The actual tool handlers run from
+ * sdk-mcp-server.ts via the SDK MCP server. These definitions are never
+ * executed at runtime. See sdk-mcp-server.ts header for refactor plan.
  */
 
 import type { AIBrowserTool, ToolResult } from '../types'
@@ -149,63 +153,9 @@ export const emulateTool: AIBrowserTool = {
   }
 }
 
-/**
- * resize_page - Resize the browser viewport
- * Aligned with chrome-devtools-mcp: resize_page (in pages.ts)
- */
-export const resizePageTool: AIBrowserTool = {
-  name: 'browser_resize',
-  description: "Resizes the selected page's window so that the page has specified dimension",
-  category: 'emulation',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      width: {
-        type: 'number',
-        description: 'Page width'
-      },
-      height: {
-        type: 'number',
-        description: 'Page height'
-      }
-    },
-    required: ['width', 'height']
-  },
-  handler: async (params, context): Promise<ToolResult> => {
-    const width = params.width as number
-    const height = params.height as number
-
-    if (!context.getActiveViewId()) {
-      return {
-        content: 'No active browser page.',
-        isError: true
-      }
-    }
-
-    try {
-      await context.sendCDPCommand('Emulation.setDeviceMetricsOverride', {
-        width,
-        height,
-        deviceScaleFactor: 1,
-        mobile: false,
-        screenWidth: width,
-        screenHeight: height
-      })
-
-      return {
-        content: `Viewport resized to: ${width}x${height}`
-      }
-    } catch (error) {
-      return {
-        content: `Resize failed: ${(error as Error).message}`,
-        isError: true
-      }
-    }
-  }
-}
-
 // Export all emulation tools
+// Note: browser_resize is defined in navigation.ts alongside other page-management tools.
+// The authoritative implementation lives in sdk-mcp-server.ts.
 export const emulationTools: AIBrowserTool[] = [
-  emulateTool,
-  resizePageTool
+  emulateTool
 ]

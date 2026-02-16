@@ -3,6 +3,10 @@
  *
  * Tools for viewing console logs, warnings, and errors.
  * Tool descriptions aligned with chrome-devtools-mcp for 100% compatibility.
+ *
+ * WARNING: This file is DEAD CODE. The actual tool handlers run from
+ * sdk-mcp-server.ts via the SDK MCP server. These definitions are never
+ * executed at runtime. See sdk-mcp-server.ts header for refactor plan.
  */
 
 import type { AIBrowserTool, ToolResult, ConsoleMessage } from '../types'

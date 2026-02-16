@@ -527,12 +527,9 @@ class AISourceManager {
     const legacyConfig = this.buildLegacyOAuthConfig(source)
     const tokenStatus = provider.checkTokenWithConfig(legacyConfig)
 
-    if (!tokenStatus.valid) {
-      return { success: false, error: 'Token expired' }
-    }
+    console.log(`[AISourceManager] Token status for ${source.name}:`, tokenStatus)
 
-    if (tokenStatus.needsRefresh) {
-      console.log(`[AISourceManager] Token for ${source.name} needs refresh, refreshing...`)
+    if (!tokenStatus.valid || tokenStatus.needsRefresh) {
       const refreshResult = await provider.refreshTokenWithConfig(legacyConfig)
 
       if (refreshResult.success && refreshResult.data) {

@@ -3,9 +3,51 @@
  *
  * Tools for clicking, filling forms, keyboard input, and drag operations.
  * Tool descriptions aligned with chrome-devtools-mcp for 100% compatibility.
+ *
+ * WARNING: This file is DEAD CODE. The actual tool handlers run from
+ * sdk-mcp-server.ts via the SDK MCP server. These definitions are never
+ * executed at runtime. See sdk-mcp-server.ts header for refactor plan.
  */
 
-import type { AIBrowserTool, ToolResult } from '../types'
+import type { AIBrowserTool, ToolResult, BrowserContextInterface } from '../types'
+
+/**
+ * Determine how to fill a form element, handling combobox disambiguation.
+ *
+ * - combobox with option children → select-like (e.g. <select>), use selectOption.
+ *   If no matching option is found, fall back to fillElement for editable comboboxes
+ *   that happen to have autocomplete suggestions showing.
+ * - combobox without option children → editable (e.g. search input), use fillElement.
+ * - everything else → fillElement.
+ */
+async function fillFormElement(
+  uid: string,
+  value: string,
+  context: BrowserContextInterface
+): Promise<void> {
+  const element = context.getElementByUid(uid)
+
+  if (element && element.role === 'combobox') {
+    const hasOptions = element.children?.some(child => child.role === 'option')
+    if (hasOptions) {
+      try {
+        await context.selectOption(uid, value)
+        return
+      } catch (e) {
+        // Only fall back for "option not found" — rethrow infrastructure errors (CDP failures, etc.)
+        if (!(e instanceof Error) || !e.message.includes('Could not find option')) {
+          throw e
+        }
+        // No matching option — combobox may be editable, fall back to text input
+      }
+    }
+    // Editable combobox (no options, or no matching option) — fill as text
+    await context.fillElement(uid, value)
+    return
+  }
+
+  await context.fillElement(uid, value)
+}
 
 /**
  * click - Click on an element
@@ -132,14 +174,7 @@ export const fillTool: AIBrowserTool = {
     }
 
     try {
-      // Check if this is a combobox/select element
-      const element = context.getElementByUid(uid)
-      if (element && element.role === 'combobox') {
-        // For combobox, we need to find the matching option
-        await context.selectOption(uid, value)
-      } else {
-        await context.fillElement(uid, value)
-      }
+      await fillFormElement(uid, value, context)
       return {
         content: 'Successfully filled out the element'
       }
@@ -192,12 +227,7 @@ export const fillFormTool: AIBrowserTool = {
 
     for (const elem of elements) {
       try {
-        const element = context.getElementByUid(elem.uid)
-        if (element && element.role === 'combobox') {
-          await context.selectOption(elem.uid, elem.value)
-        } else {
-          await context.fillElement(elem.uid, elem.value)
-        }
+        await fillFormElement(elem.uid, elem.value, context)
       } catch (error) {
         errors.push(`${elem.uid}: ${(error as Error).message}`)
       }

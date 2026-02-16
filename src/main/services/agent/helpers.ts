@@ -210,10 +210,15 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     console.log(`[Agent] Using OpenAI-compatible API (${currentSource?.provider || 'unknown'}) via AISourceManager`)
   }
 
+  const modelId = backendConfig.model || 'claude-opus-4-5-20251101'
+  const modelOption = currentSource?.availableModels?.find(m => m.id === modelId)
+  const displayModel = modelOption?.name || modelId
+
   return {
     baseUrl: backendConfig.url,
     apiKey: backendConfig.key,
-    model: backendConfig.model || 'claude-opus-4-5-20251101',
+    model: modelId,
+    displayModel,
     provider,
     customHeaders: backendConfig.headers,
     apiType: backendConfig.apiType,

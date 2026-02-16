@@ -22,6 +22,9 @@ export interface JSONSchema {
   properties?: Record<string, JSONSchema>
   required?: string[]
   default?: unknown
+  minimum?: number
+  maximum?: number
+  nullable?: boolean
 }
 
 /**
@@ -256,6 +259,13 @@ export interface BrowserContextInterface {
   // Wait utilities
   waitForText(text: string, timeout?: number): Promise<void>
   waitForElement(selector: string, timeout?: number): Promise<void>
+  waitForNavigation(timeout?: number): Promise<void>
+
+  // Page URL (synchronous)
+  getPageUrl(): string
+
+  // Viewport
+  setViewportSize(width: number, height: number): Promise<void>
 }
 
 // ============================================

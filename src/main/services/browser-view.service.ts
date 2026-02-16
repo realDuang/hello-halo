@@ -108,6 +108,16 @@ class BrowserViewManager {
     // Set background color to white (standard web)
     view.setBackgroundColor('#ffffff')
 
+    // Attach to window at offscreen bounds so the Chromium compositor allocates
+    // a compositing surface. Without this, CDP commands that need pixel output
+    // (e.g. Page.captureScreenshot) will hang because no frames are produced.
+    // show() later repositions the view to visible bounds; addBrowserView is
+    // idempotent so the subsequent call in show() is a safe no-op.
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.addBrowserView(view)
+      view.setBounds({ x: -10000, y: -10000, width: 1280, height: 720 })
+    }
+
     // Initialize state
     const state: BrowserViewState = {
       id: viewId,

@@ -3,6 +3,10 @@
  *
  * Tools for navigating between pages, managing tabs, and waiting for content.
  * Tool descriptions aligned with chrome-devtools-mcp for 100% compatibility.
+ *
+ * WARNING: This file is DEAD CODE. The actual tool handlers run from
+ * sdk-mcp-server.ts via the SDK MCP server. These definitions are never
+ * executed at runtime. See sdk-mcp-server.ts header for refactor plan.
  */
 
 import type { AIBrowserTool, ToolResult } from '../types'
@@ -22,7 +26,7 @@ export const listPagesTool: AIBrowserTool = {
   },
   handler: async (_params, _context): Promise<ToolResult> => {
     // Get all view states from the manager
-    const states = (browserViewManager as any).getAllStates?.() || []
+    const states = browserViewManager.getAllStates()
 
     if (states.length === 0) {
       return {
@@ -31,7 +35,7 @@ export const listPagesTool: AIBrowserTool = {
     }
 
     const lines = ['Open browser pages:']
-    states.forEach((state: any, index: number) => {
+    states.forEach((state, index) => {
       lines.push(`[${index}] ${state.title || 'Untitled'} - ${state.url || 'about:blank'}`)
     })
 
@@ -65,7 +69,7 @@ export const selectPageTool: AIBrowserTool = {
   },
   handler: async (params, context): Promise<ToolResult> => {
     const pageIdx = params.pageIdx as number
-    const states = (browserViewManager as any).getAllStates?.() || []
+    const states = browserViewManager.getAllStates()
 
     if (pageIdx < 0 || pageIdx >= states.length) {
       return {
@@ -119,15 +123,8 @@ export const newPageTool: AIBrowserTool = {
       // Set as active view in context
       context.setActiveViewId(viewId)
 
-      // Wait for page load with timeout
-      const startTime = Date.now()
-      while (Date.now() - startTime < timeout) {
-        const currentState = browserViewManager.getState(viewId)
-        if (currentState && !currentState.isLoading) {
-          break
-        }
-        await new Promise(resolve => setTimeout(resolve, 100))
-      }
+      // Wait for page load with timeout (no busy-wait)
+      await context.waitForNavigation(timeout)
 
       const finalState = browserViewManager.getState(viewId)
       return {
@@ -235,12 +232,15 @@ export const navigatePageTool: AIBrowserTool = {
       switch (type) {
         case 'back':
           browserViewManager.goBack(viewId)
+          await context.waitForNavigation(timeout)
           return { content: `Successfully navigated back.` }
         case 'forward':
           browserViewManager.goForward(viewId)
+          await context.waitForNavigation(timeout)
           return { content: `Successfully navigated forward.` }
         case 'reload':
           browserViewManager.reload(viewId)
+          await context.waitForNavigation(timeout)
           return { content: `Successfully reloaded the page.` }
         case 'url':
         default:
@@ -254,15 +254,8 @@ export const navigatePageTool: AIBrowserTool = {
           break
       }
 
-      // Wait for navigation to complete
-      const startTime = Date.now()
-      while (Date.now() - startTime < timeout) {
-        const state = browserViewManager.getState(viewId)
-        if (state && !state.isLoading) {
-          break
-        }
-        await new Promise(resolve => setTimeout(resolve, 100))
-      }
+      // Wait for navigation to complete (no busy-wait)
+      await context.waitForNavigation(timeout)
 
       const finalState = browserViewManager.getState(viewId)
       return {

@@ -2,6 +2,11 @@
  * AI Browser Tools - Export all tools
  *
  * This module exports all 26 AI Browser tools organized by category.
+ *
+ * WARNING: This entire directory is DEAD CODE. The actual tool handlers
+ * run from sdk-mcp-server.ts via the SDK MCP server. These definitions
+ * are never executed at runtime. See sdk-mcp-server.ts header for
+ * refactor plan.
  */
 
 import type { AIBrowserTool } from '../types'
@@ -14,16 +19,20 @@ import { emulationTools } from './emulation'
 import { performanceTools } from './performance'
 
 /**
- * All AI Browser tools
+ * All AI Browser tools (26 total)
+ *
+ * The authoritative implementation lives in sdk-mcp-server.ts.
+ * These tool definitions serve as schema references and as a
+ * fallback execution path via executeAIBrowserTool().
  */
 export const allTools: AIBrowserTool[] = [
-  ...navigationTools,    // 6 tools
-  ...inputTools,         // 8 tools
-  ...snapshotTools,      // 3 tools
-  ...networkTools,       // 2 tools
-  ...consoleTools,       // 2 tools
-  ...emulationTools,     // 2 tools
-  ...performanceTools    // 3 tools
+  ...navigationTools,    // 8 tools: list_pages, select_page, new_page, close_page, navigate, wait_for, resize, handle_dialog
+  ...inputTools,         // 7 tools: click, hover, fill, fill_form, drag, press_key, upload_file
+  ...snapshotTools,      // 3 tools: snapshot, screenshot, evaluate
+  ...networkTools,       // 2 tools: network_requests, network_request
+  ...consoleTools,       // 2 tools: console, console_message
+  ...emulationTools,     // 1 tool:  emulate
+  ...performanceTools    // 3 tools: perf_start, perf_stop, perf_insight
 ]
 
 /**
