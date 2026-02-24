@@ -11,7 +11,8 @@ import {
   getActiveSessions,
   getSessionState as agentGetSessionState,
   testMcpConnections as agentTestMcpConnections,
-  resolveQuestion
+  resolveQuestion,
+  queueMessage as agentQueueMessage
 } from '../services/agent'
 
 // Image attachment type for multi-modal messages
@@ -146,6 +147,24 @@ export async function testMcpConnections(mainWindow?: BrowserWindow | null): Pro
   try {
     const result = await agentTestMcpConnections(mainWindow)
     return result
+  } catch (error: unknown) {
+    const err = error as Error
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Queue a message while agent is generating
+ */
+export function queueMessage(
+  conversationId: string,
+  message: string,
+  images?: ImageAttachment[],
+  canvasContext?: Record<string, unknown>
+): ControllerResponse {
+  try {
+    agentQueueMessage(conversationId, message, images, canvasContext as any)
+    return { success: true }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }

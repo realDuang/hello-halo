@@ -288,6 +288,12 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
     res.json(result)
   })
 
+  app.post('/api/agent/queue-message', async (req: Request, res: Response) => {
+    const { conversationId, message, images, canvasContext } = req.body
+    const result = agentController.queueMessage(conversationId, message, images, canvasContext)
+    res.json(result)
+  })
+
   app.post('/api/agent/stop', async (req: Request, res: Response) => {
     const { conversationId } = req.body
     const result = agentController.stopGeneration(conversationId)

@@ -449,6 +449,31 @@ export const api = {
     return httpRequest('POST', '/api/agent/answer-question', data)
   },
 
+  // Queue a message while agent is generating
+  queueMessage: async (data: {
+    conversationId: string
+    message: string
+    images?: Array<{
+      id: string
+      type: 'image'
+      mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+      data: string
+      name?: string
+      size?: number
+    }>
+    canvasContext?: {
+      isOpen: boolean
+      tabCount: number
+      activeTab: { type: string; title: string; url?: string; path?: string } | null
+      tabs: Array<{ type: string; title: string; url?: string; path?: string; isActive: boolean }>
+    }
+  }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.queueMessage(data)
+    }
+    return httpRequest('POST', '/api/agent/queue-message', data)
+  },
+
   // Test MCP server connections
   testMcpConnections: async (): Promise<{ success: boolean; servers: unknown[]; error?: string }> => {
     if (isElectron()) {
@@ -766,6 +791,8 @@ export const api = {
     onEvent('agent:compact', callback),
   onAgentAskQuestion: (callback: (data: unknown) => void) =>
     onEvent('agent:ask-question', callback),
+  onAgentQueueProcessed: (callback: (data: unknown) => void) =>
+    onEvent('agent:queue-processed', callback),
   onRemoteStatusChange: (callback: (data: unknown) => void) =>
     onEvent('remote:status-change', callback),
 

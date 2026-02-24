@@ -120,6 +120,24 @@ export interface HaloAPI {
   ensureSessionWarm: (spaceId: string, conversationId: string) => Promise<IpcResponse>
   testMcpConnections: () => Promise<{ success: boolean; servers: unknown[]; error?: string }>
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
+  queueMessage: (data: {
+    conversationId: string
+    message: string
+    images?: Array<{
+      id: string
+      type: 'image'
+      mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+      data: string
+      name?: string
+      size?: number
+    }>
+    canvasContext?: {
+      isOpen: boolean
+      tabCount: number
+      activeTab: { type: string; title: string; url?: string; path?: string } | null
+      tabs: Array<{ type: string; title: string; url?: string; path?: string; isActive: boolean }>
+    }
+  }) => Promise<IpcResponse>
 
   // Event listeners
   onAgentMessage: (callback: (data: unknown) => void) => () => void
@@ -133,6 +151,7 @@ export interface HaloAPI {
   onAgentMcpStatus: (callback: (data: unknown) => void) => () => void
   onAgentCompact: (callback: (data: unknown) => void) => () => void
   onAgentAskQuestion: (callback: (data: unknown) => void) => () => void
+  onAgentQueueProcessed: (callback: (data: unknown) => void) => () => void
 
   // Artifact
   listArtifacts: (spaceId: string) => Promise<IpcResponse>
@@ -393,6 +412,7 @@ const api: HaloAPI = {
   ensureSessionWarm: (spaceId, conversationId) => ipcRenderer.invoke('agent:ensure-session-warm', spaceId, conversationId),
   testMcpConnections: () => ipcRenderer.invoke('agent:test-mcp'),
   answerQuestion: (data) => ipcRenderer.invoke('agent:answer-question', data),
+  queueMessage: (data) => ipcRenderer.invoke('agent:queue-message', data),
 
   // Event listeners
   onAgentMessage: (callback) => createEventListener('agent:message', callback),
@@ -406,6 +426,7 @@ const api: HaloAPI = {
   onAgentMcpStatus: (callback) => createEventListener('agent:mcp-status', callback),
   onAgentCompact: (callback) => createEventListener('agent:compact', callback),
   onAgentAskQuestion: (callback) => createEventListener('agent:ask-question', callback),
+  onAgentQueueProcessed: (callback) => createEventListener('agent:queue-processed', callback),
 
   // Artifact
   listArtifacts: (spaceId) => ipcRenderer.invoke('artifact:list', spaceId),

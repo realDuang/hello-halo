@@ -3,7 +3,7 @@
  */
 
 import { ipcMain } from 'electron'
-import { sendMessage, stopGeneration, getSessionState, ensureSessionWarm, testMcpConnections, resolveQuestion } from '../services/agent'
+import { sendMessage, stopGeneration, getSessionState, ensureSessionWarm, testMcpConnections, resolveQuestion, queueMessage } from '../services/agent'
 import { getMainWindow } from '../services/window.service'
 
 export function registerAgentHandlers(): void {
@@ -31,6 +31,40 @@ export function registerAgentHandlers(): void {
     ) => {
       try {
         await sendMessage(getMainWindow(), request)
+        return { success: true }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    }
+  )
+
+  // Queue a message while agent is generating
+  ipcMain.handle(
+    'agent:queue-message',
+    async (
+      _event,
+      data: {
+        conversationId: string
+        message: string
+        images?: Array<{
+          id: string
+          type: 'image'
+          mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+          data: string
+          name?: string
+          size?: number
+        }>
+        canvasContext?: {
+          isOpen: boolean
+          tabCount: number
+          activeTab: { type: string; title: string; url?: string; path?: string } | null
+          tabs: Array<{ type: string; title: string; url?: string; path?: string; isActive: boolean }>
+        }
+      }
+    ) => {
+      try {
+        queueMessage(data.conversationId, data.message, data.images, data.canvasContext)
         return { success: true }
       } catch (error: unknown) {
         const err = error as Error

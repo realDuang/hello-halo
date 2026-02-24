@@ -82,6 +82,7 @@ export default function App() {
     handleAgentThoughtDelta,
     handleAgentCompact,
     handleAskQuestion,
+    handleAgentQueueProcessed,
     currentSpaceId,
     setCurrentSpace: setChatCurrentSpace,
     loadConversations,
@@ -242,6 +243,12 @@ export default function App() {
       handleAskQuestion(data as AgentEventBase & { id: string; questions: Question[] })
     })
 
+    // Queue processed - backend picked up a queued message for next turn
+    const unsubQueueProcessed = api.onAgentQueueProcessed((data) => {
+      console.log('[App] Received agent:queue-processed event:', data)
+      handleAgentQueueProcessed(data as AgentEventBase & { message: string; remainingQueue: number })
+    })
+
     // MCP status updates (global - not per-conversation)
     const unsubMcpStatus = api.onAgentMcpStatus((data) => {
       console.log('[App] Received agent:mcp-status event:', data)
@@ -261,6 +268,7 @@ export default function App() {
       unsubComplete()
       unsubCompact()
       unsubAskQuestion()
+      unsubQueueProcessed()
       unsubMcpStatus()
     }
   }, [
@@ -273,6 +281,7 @@ export default function App() {
     handleAgentThoughtDelta,
     handleAgentCompact,
     handleAskQuestion,
+    handleAgentQueueProcessed,
     setMcpStatus
   ])
 

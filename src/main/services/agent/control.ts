@@ -9,6 +9,7 @@
  */
 
 import { activeSessions, v2Sessions } from './session-manager'
+import { clearMessageQueue } from './send-message'
 import type { Thought } from './types'
 
 // ============================================
@@ -48,10 +49,15 @@ export async function stopGeneration(conversationId?: string): Promise<void> {
 
       console.log(`[Agent] Stopped generation for conversation: ${conversationId}`)
     }
+    // Clear any queued messages
+    clearMessageQueue(conversationId)
   } else {
     // Stop all sessions (backward compatibility)
     for (const [convId, session] of Array.from(activeSessions)) {
       session.abortController.abort()
+
+      // Clear queued messages for this conversation
+      clearMessageQueue(convId)
 
       // Interrupt V2 Session
       const v2Session = v2Sessions.get(convId)

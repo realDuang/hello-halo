@@ -242,7 +242,7 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
     const hasContent = textToSend || images.length > 0
 
-    if (hasContent && !isGenerating) {
+    if (hasContent) {
       onSend(textToSend, images.length > 0 ? images : undefined, thinkingEnabled)
 
       if (!isOnboardingSendStep) {
@@ -282,8 +282,9 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
   }
 
   // In onboarding mode, can always send (prefilled content)
-  // Can send if has text OR has images (and not processing/generating)
-  const canSend = isOnboardingSendStep || ((content.trim().length > 0 || images.length > 0) && !isGenerating && !isProcessingImages)
+  // Can send if has text OR has images (and not processing images)
+  // When isGenerating, user can still send - message will be queued
+  const canSend = isOnboardingSendStep || ((content.trim().length > 0 || images.length > 0) && !isProcessingImages)
   const hasImages = images.length > 0
 
   return (
@@ -320,7 +321,6 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
               ? 'ring-1 ring-primary/30 bg-card shadow-sm'
               : 'bg-secondary/50 hover:bg-secondary/70'
             }
-            ${isGenerating ? 'opacity-60' : ''}
             ${isDragOver ? 'ring-2 ring-primary/50 bg-primary/5' : ''}
           `}
           onDragOver={handleDragOver}
@@ -365,13 +365,13 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
               onPaste={handlePaste}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
-              placeholder={placeholder || t('Type a message, let Halo help you...')}
-              disabled={isGenerating}
+              placeholder={placeholder || (isGenerating ? t('Type to queue a follow-up message...') : t('Type a message, let Halo help you...'))}
+              disabled={false}
               readOnly={isOnboardingSendStep}
               rows={1}
               className={`w-full bg-transparent resize-none
                 focus:outline-none text-foreground placeholder:text-muted-foreground/50
-                disabled:cursor-not-allowed min-h-[24px]
+                min-h-[24px]
                 ${isOnboardingSendStep ? 'cursor-default' : ''}`}
               style={{ maxHeight: '200px' }}
             />
@@ -539,9 +539,9 @@ function InputToolbar({
         )}
       </div>
 
-      {/* Right section: action button only */}
-      <div className="flex items-center">
-        {isGenerating ? (
+      {/* Right section: action buttons */}
+      <div className="flex items-center gap-1">
+        {isGenerating && (
           <button
             onClick={onStop}
             className="w-8 h-8 flex items-center justify-center
@@ -552,7 +552,8 @@ function InputToolbar({
           >
             <div className="w-3 h-3 border-2 border-current rounded-sm" />
           </button>
-        ) : (
+        )}
+        {(!isGenerating || canSend) && (
           <button
             data-onboarding="send-button"
             onClick={onSend}
@@ -564,7 +565,7 @@ function InputToolbar({
                 : 'bg-muted/50 text-muted-foreground/40 cursor-not-allowed'
               }
             `}
-            title={thinkingEnabled ? t('Send (Deep Thinking)') : t('Send')}
+            title={isGenerating ? t('Queue message') : (thinkingEnabled ? t('Send (Deep Thinking)') : t('Send'))}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />

@@ -47,7 +47,7 @@ export type {
 // ============================================
 
 // Send message to agent
-export { sendMessage } from './send-message'
+export { sendMessage, queueMessage, clearMessageQueue, getQueueSize } from './send-message'
 
 // Generation control
 export {

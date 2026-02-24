@@ -138,6 +138,7 @@ interface ChatState {
 
   // Messaging
   sendMessage: (content: string, images?: ImageAttachment[], aiBrowserEnabled?: boolean, thinkingEnabled?: boolean) => Promise<void>
+  queueMessage: (content: string, images?: ImageAttachment[]) => Promise<void>
   stopGeneration: (conversationId?: string) => Promise<void>
 
   // Tool approval
@@ -170,6 +171,9 @@ interface ChatState {
   // AskUserQuestion handlers
   handleAskQuestion: (data: AgentEventBase & { id: string; questions: Question[] }) => void
   answerQuestion: (conversationId: string, answers: Record<string, string>) => Promise<void>
+
+  // Queue processed handler
+  handleAgentQueueProcessed: (data: AgentEventBase & { message: string; remainingQueue: number }) => Promise<void>
 
   // Thoughts lazy loading
   loadMessageThoughts: (spaceId: string, conversationId: string, messageId: string) => Promise<Thought[]>
@@ -794,6 +798,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  // Queue a message while agent is generating (will be processed after current turn)
+  queueMessage: async (content, images) => {
+    const conversationMeta = get().getCurrentConversationMeta()
+    const { currentSpaceId } = get()
+
+    if (!conversationMeta || !currentSpaceId) {
+      console.error('[ChatStore] No conversation or space selected for queue')
+      return
+    }
+
+    const conversationId = conversationMeta.id
+
+    try {
+      // Build canvas context (same as sendMessage)
+      let canvasContext: CanvasContext | undefined
+      const canvasState = canvasLifecycle.getCanvasState()
+      if (canvasState) {
+        canvasContext = canvasState
+      }
+
+      // Queue the message via backend
+      await api.queueMessage({
+        conversationId,
+        message: content,
+        images,
+        canvasContext
+      })
+
+      console.log(`[ChatStore] Message queued for [${conversationId}]`)
+    } catch (error) {
+      console.error('Failed to queue message:', error)
+    }
+  },
+
   // Stop generation for a specific conversation
   stopGeneration: async (conversationId?: string) => {
     const targetId = conversationId || get().getCurrentSpaceState().currentConversationId
@@ -1262,6 +1300,68 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
     } catch (error) {
       console.error('[ChatStore] Failed to answer question:', error)
+    }
+  },
+
+  // Handle queued message being processed by backend
+  // This is emitted when the backend picks up a queued message for the next turn.
+  // The backend has already added the user message and assistant placeholder to disk,
+  // so we reload from backend (single source of truth) and reset streaming state.
+  handleAgentQueueProcessed: async (data) => {
+    const { spaceId, conversationId, message } = data
+    console.log(`[ChatStore] Queue processed for [${conversationId}]: "${message.slice(0, 50)}"`)
+
+    // Reload conversation from backend to pick up the queued user message and assistant placeholder
+    try {
+      const response = await api.getConversation(spaceId, conversationId)
+      if (response.success && response.data) {
+        const updatedConversation = response.data as Conversation
+
+        set((state) => {
+          // Update cache with fresh data from backend
+          const newCache = new Map(state.conversationCache)
+          newCache.set(conversationId, updatedConversation)
+
+          // Reset session streaming state for new turn (keep isGenerating=true)
+          const newSessions = new Map(state.sessions)
+          const session = newSessions.get(conversationId)
+          if (session) {
+            newSessions.set(conversationId, {
+              ...session,
+              isGenerating: true,
+              streamingContent: '',
+              isStreaming: false,
+              thoughts: [],
+              isThinking: true,
+              error: null,
+              errorType: null,
+              textBlockVersion: 0
+            })
+          }
+
+          // Update metadata
+          const newSpaceStates = new Map(state.spaceStates)
+          const spaceState = newSpaceStates.get(spaceId)
+          if (spaceState) {
+            newSpaceStates.set(spaceId, {
+              ...spaceState,
+              conversations: spaceState.conversations.map((c) =>
+                c.id === conversationId
+                  ? {
+                      ...c,
+                      messageCount: updatedConversation.messages?.length || c.messageCount,
+                      updatedAt: new Date().toISOString()
+                    }
+                  : c
+              )
+            })
+          }
+
+          return { conversationCache: newCache, sessions: newSessions, spaceStates: newSpaceStates }
+        })
+      }
+    } catch (error) {
+      console.error('[ChatStore] Failed to reload conversation for queue-processed:', error)
     }
   },
 

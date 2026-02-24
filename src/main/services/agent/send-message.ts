@@ -59,6 +59,75 @@ import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
 const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
 
 // ============================================
+// Message Queue (per-conversation)
+// ============================================
+
+/**
+ * Queued message entry - user input submitted while agent is generating
+ *
+ * Inspired by Claude Code CLI's input queue mechanism: when the user sends
+ * a message while the agent is busy, it is queued and automatically processed
+ * after the current turn completes, rather than being rejected.
+ */
+interface QueuedMessage {
+  message: string
+  images?: AgentRequest['images']
+  canvasContext?: AgentRequest['canvasContext']
+}
+
+/** Per-conversation message queues */
+const messageQueues = new Map<string, QueuedMessage[]>()
+
+/**
+ * Queue a message for a conversation that is currently generating.
+ * The message will be automatically sent after the current turn completes.
+ */
+export function queueMessage(
+  conversationId: string,
+  message: string,
+  images?: AgentRequest['images'],
+  canvasContext?: AgentRequest['canvasContext']
+): void {
+  const queue = messageQueues.get(conversationId) || []
+  queue.push({ message, images, canvasContext })
+  messageQueues.set(conversationId, queue)
+  console.log(`[Agent][${conversationId}] Message queued (queue size: ${queue.length})`)
+}
+
+/**
+ * Dequeue the next message for a conversation, if any.
+ */
+function dequeueMessage(conversationId: string): QueuedMessage | undefined {
+  const queue = messageQueues.get(conversationId)
+  if (!queue || queue.length === 0) return undefined
+  const item = queue.shift()
+  if (queue.length === 0) {
+    messageQueues.delete(conversationId)
+  }
+  console.log(`[Agent][${conversationId}] Message dequeued (remaining: ${queue?.length ?? 0})`)
+  return item
+}
+
+/**
+ * Clear all queued messages for a conversation.
+ * Called when the user stops generation or on error.
+ */
+export function clearMessageQueue(conversationId: string): void {
+  const queue = messageQueues.get(conversationId)
+  if (queue && queue.length > 0) {
+    console.log(`[Agent][${conversationId}] Clearing ${queue.length} queued message(s)`)
+  }
+  messageQueues.delete(conversationId)
+}
+
+/**
+ * Get the number of queued messages for a conversation.
+ */
+export function getQueueSize(conversationId: string): number {
+  return messageQueues.get(conversationId)?.length ?? 0
+}
+
+// ============================================
 // Send Message
 // ============================================
 
@@ -217,19 +286,78 @@ export async function sendMessage(
     }
     console.log(`[Agent][${conversationId}] ⏱️ V2 session ready: ${Date.now() - t0}ms`)
 
-    // Process the stream
-    await processMessageStream(
-      v2Session,
-      sessionState,
-      spaceId,
-      conversationId,
-      message,
-      images,
-      canvasContext,
-      resolvedCredentials.displayModel,
-      abortController,
-      t0
-    )
+    // Process the stream (with queued message loop)
+    // After each turn, check if the user queued additional messages while the agent
+    // was generating. If so, process them as follow-up turns within the same session,
+    // similar to how Claude Code CLI handles its input queue.
+    let currentMessage = message
+    let currentImages = images
+    let currentCanvasContext = canvasContext
+    let turnStartTime = t0
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      await processMessageStream(
+        v2Session,
+        sessionState,
+        spaceId,
+        conversationId,
+        currentMessage,
+        currentImages,
+        currentCanvasContext,
+        resolvedCredentials.displayModel,
+        abortController,
+        turnStartTime,
+        { skipCompleteEvent: true } // We'll send complete after the loop
+      )
+
+      // Check for queued messages after this turn completes
+      if (abortController.signal.aborted) break
+
+      const queued = dequeueMessage(conversationId)
+      if (!queued) break
+
+      // Process queued message as a new turn
+      console.log(`[Agent][${conversationId}] Processing queued message (remaining: ${getQueueSize(conversationId)})`)
+
+      // Reset session state for the new turn
+      sessionState.thoughts = []
+
+      // Add the queued user message to conversation
+      addMessage(spaceId, conversationId, {
+        role: 'user',
+        content: queued.message,
+        images: queued.images
+      })
+
+      // Add placeholder for assistant response
+      addMessage(spaceId, conversationId, {
+        role: 'assistant',
+        content: '',
+        toolCalls: []
+      })
+
+      // Notify frontend about the queued message being processed
+      // Frontend uses this to reload conversation data and reset streaming state
+      sendToRenderer('agent:queue-processed', spaceId, conversationId, {
+        type: 'queue-processed',
+        message: queued.message,
+        images: queued.images,
+        remainingQueue: getQueueSize(conversationId)
+      })
+
+      currentMessage = queued.message
+      currentImages = queued.images
+      currentCanvasContext = queued.canvasContext
+      turnStartTime = Date.now()
+    }
+
+    // Send final complete event after all turns are done
+    sendToRenderer('agent:complete', spaceId, conversationId, {
+      type: 'complete',
+      duration: Date.now() - t0,
+      tokenUsage: undefined
+    })
 
     // System notification for task completion (if window not focused)
     notifyTaskComplete(conversation?.title || 'Conversation')
@@ -304,6 +432,8 @@ export async function sendMessage(
 
     // Close V2 session on error (it may be in a bad state)
     closeV2Session(conversationId)
+    // Clear any queued messages on error
+    clearMessageQueue(conversationId)
   } finally {
     // Clean up active session state (but keep V2 session for reuse)
     unregisterActiveSession(conversationId)
@@ -328,7 +458,8 @@ async function processMessageStream(
   canvasContext: AgentRequest['canvasContext'],
   displayModel: string,
   abortController: AbortController,
-  t0: number
+  t0: number,
+  options?: { skipCompleteEvent?: boolean }
 ): Promise<void> {
   // Only keep track of the LAST text block as the final reply
   // Intermediate text blocks are shown in thought process, not accumulated into message bubble
@@ -907,12 +1038,14 @@ async function processMessageStream(
     console.log(`[Agent][${conversationId}] No content to save`)
   }
 
-  // Step 2: Always send complete event to unblock frontend
-  sendToRenderer('agent:complete', spaceId, conversationId, {
-    type: 'complete',
-    duration: 0,
-    tokenUsage
-  })
+  // Step 2: Always send complete event to unblock frontend (unless caller will handle it)
+  if (!options?.skipCompleteEvent) {
+    sendToRenderer('agent:complete', spaceId, conversationId, {
+      type: 'complete',
+      duration: 0,
+      tokenUsage
+    })
+  }
 
   // Step 3: Determine if interrupted error should be sent
   const getInterruptedErrorMessage = (): string | null => {

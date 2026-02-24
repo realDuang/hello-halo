@@ -40,6 +40,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     getCurrentConversation,
     getCurrentSession,
     sendMessage,
+    queueMessage,
     stopGeneration,
     continueAfterInterrupt,
     answerQuestion
@@ -244,7 +245,13 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
 
     // Can send if has text OR has images
-    if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
+    if (!content.trim() && (!images || images.length === 0)) return
+
+    // If agent is generating, queue the message for processing after current turn
+    if (isGenerating) {
+      await queueMessage(content, images)
+      return
+    }
 
     // Pass both AI Browser and thinking state to sendMessage
     await sendMessage(content, images, aiBrowserEnabled, thinkingEnabled)
