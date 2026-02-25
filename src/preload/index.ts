@@ -28,7 +28,15 @@ export interface HaloAPI {
   getConfig: () => Promise<IpcResponse>
   setConfig: (updates: Record<string, unknown>) => Promise<IpcResponse>
   validateApi: (apiKey: string, apiUrl: string, provider: string) => Promise<IpcResponse>
+  fetchModels: (apiKey: string, apiUrl: string) => Promise<IpcResponse>
   refreshAISourcesConfig: () => Promise<IpcResponse>
+
+  // AI Sources CRUD (atomic - backend reads from disk, never overwrites rotating tokens)
+  aiSourcesSwitchSource: (sourceId: string) => Promise<IpcResponse>
+  aiSourcesSetModel: (modelId: string) => Promise<IpcResponse>
+  aiSourcesAddSource: (source: unknown) => Promise<IpcResponse>
+  aiSourcesUpdateSource: (sourceId: string, updates: unknown) => Promise<IpcResponse>
+  aiSourcesDeleteSource: (sourceId: string) => Promise<IpcResponse>
 
   // Space
   getHaloSpace: () => Promise<IpcResponse>
@@ -327,6 +335,62 @@ export interface HaloAPI {
   generateHealthReportText: () => Promise<IpcResponse<string>>
   exportHealthReport: (filePath?: string) => Promise<IpcResponse<HealthExportResponse>>
   runHealthCheck: () => Promise<IpcResponse<HealthCheckResponse>>
+
+  // Notification Channels
+  testNotificationChannel: (channelType: string) => Promise<IpcResponse>
+  clearNotificationChannelCache: () => Promise<IpcResponse>
+
+  // Apps Management
+  appList: (filter?: { spaceId?: string; status?: string; type?: string }) => Promise<IpcResponse>
+  appGet: (appId: string) => Promise<IpcResponse>
+  appInstall: (input: { spaceId: string; spec: unknown; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
+  appUninstall: (input: { appId: string; options?: { purge?: boolean } }) => Promise<IpcResponse>
+  appReinstall: (input: { appId: string }) => Promise<IpcResponse>
+  appDelete: (input: { appId: string }) => Promise<IpcResponse>
+  appPause: (appId: string) => Promise<IpcResponse>
+  appResume: (appId: string) => Promise<IpcResponse>
+  appTrigger: (appId: string) => Promise<IpcResponse>
+  appGetState: (appId: string) => Promise<IpcResponse>
+  appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number } }) => Promise<IpcResponse>
+  appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
+  appRespondEscalation: (input: { appId: string; escalationId: string; response: { ts: number; choice?: string; text?: string } }) => Promise<IpcResponse>
+  appUpdateConfig: (input: { appId: string; config: Record<string, unknown> }) => Promise<IpcResponse>
+  appUpdateFrequency: (input: { appId: string; subscriptionId: string; frequency: string }) => Promise<IpcResponse>
+  appUpdateOverrides: (input: { appId: string; overrides: Record<string, unknown> }) => Promise<IpcResponse>
+  appUpdateSpec: (input: { appId: string; specPatch: Record<string, unknown> }) => Promise<IpcResponse>
+  appGrantPermission: (input: { appId: string; permission: string }) => Promise<IpcResponse>
+  appRevokePermission: (input: { appId: string; permission: string }) => Promise<IpcResponse>
+
+  // App Import / Export
+  appExportSpec: (appId: string) => Promise<IpcResponse<{ yaml: string; filename: string }>>
+  appImportSpec: (input: { spaceId: string; yamlContent: string; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
+
+  // App Chat
+  appChatSend: (request: { appId: string; spaceId: string; message: string; thinkingEnabled?: boolean }) => Promise<IpcResponse>
+  appChatStop: (appId: string) => Promise<IpcResponse>
+  appChatStatus: (appId: string) => Promise<IpcResponse>
+  appChatMessages: (input: { appId: string; spaceId: string }) => Promise<IpcResponse>
+  appChatSessionState: (appId: string) => Promise<IpcResponse>
+
+  // App Event Listeners
+  onAppStatusChanged: (callback: (data: unknown) => void) => () => void
+  onAppActivityEntry: (callback: (data: unknown) => void) => () => void
+  onAppEscalation: (callback: (data: unknown) => void) => () => void
+  onAppNavigate: (callback: (data: unknown) => void) => () => void
+
+  // Notification (in-app toast)
+  onNotificationToast: (callback: (data: unknown) => void) => () => void
+
+  // Store (App Registry)
+  storeListApps: (query: { search?: string; locale?: string; category?: string; type?: string; tags?: string[] }) => Promise<IpcResponse>
+  storeGetAppDetail: (slug: string) => Promise<IpcResponse>
+  storeInstall: (input: { slug: string; spaceId: string; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
+  storeRefresh: () => Promise<IpcResponse>
+  storeCheckUpdates: () => Promise<IpcResponse>
+  storeGetRegistries: () => Promise<IpcResponse>
+  storeAddRegistry: (input: { name: string; url: string }) => Promise<IpcResponse>
+  storeRemoveRegistry: (registryId: string) => Promise<IpcResponse>
+  storeToggleRegistry: (input: { registryId: string; enabled: boolean }) => Promise<IpcResponse>
 }
 
 interface IpcResponse<T = unknown> {
@@ -369,7 +433,16 @@ const api: HaloAPI = {
   setConfig: (updates) => ipcRenderer.invoke('config:set', updates),
   validateApi: (apiKey, apiUrl, provider, model?) =>
     ipcRenderer.invoke('config:validate-api', apiKey, apiUrl, provider, model),
+  fetchModels: (apiKey, apiUrl) =>
+    ipcRenderer.invoke('config:fetch-models', apiKey, apiUrl),
   refreshAISourcesConfig: () => ipcRenderer.invoke('config:refresh-ai-sources'),
+
+  // AI Sources CRUD (atomic - backend reads from disk, never overwrites rotating tokens)
+  aiSourcesSwitchSource: (sourceId) => ipcRenderer.invoke('ai-sources:switch-source', sourceId),
+  aiSourcesSetModel: (modelId) => ipcRenderer.invoke('ai-sources:set-model', modelId),
+  aiSourcesAddSource: (source) => ipcRenderer.invoke('ai-sources:add-source', source),
+  aiSourcesUpdateSource: (sourceId, updates) => ipcRenderer.invoke('ai-sources:update-source', sourceId, updates),
+  aiSourcesDeleteSource: (sourceId) => ipcRenderer.invoke('ai-sources:delete-source', sourceId),
 
   // Space
   getHaloSpace: () => ipcRenderer.invoke('space:get-halo'),
@@ -561,6 +634,62 @@ const api: HaloAPI = {
   generateHealthReportText: () => ipcRenderer.invoke('health:generate-report-text'),
   exportHealthReport: (filePath) => ipcRenderer.invoke('health:export-report', filePath),
   runHealthCheck: () => ipcRenderer.invoke('health:run-check'),
+
+  // Notification Channels
+  testNotificationChannel: (channelType: string) => ipcRenderer.invoke('notify-channels:test', channelType),
+  clearNotificationChannelCache: () => ipcRenderer.invoke('notify-channels:clear-cache'),
+
+  // Apps Management
+  appList: (filter) => ipcRenderer.invoke('app:list', filter),
+  appGet: (appId) => ipcRenderer.invoke('app:get', appId),
+  appInstall: (input) => ipcRenderer.invoke('app:install', input),
+  appUninstall: (input) => ipcRenderer.invoke('app:uninstall', input),
+  appReinstall: (input) => ipcRenderer.invoke('app:reinstall', input),
+  appDelete: (input) => ipcRenderer.invoke('app:delete', input),
+  appPause: (appId) => ipcRenderer.invoke('app:pause', appId),
+  appResume: (appId) => ipcRenderer.invoke('app:resume', appId),
+  appTrigger: (appId) => ipcRenderer.invoke('app:trigger', appId),
+  appGetState: (appId) => ipcRenderer.invoke('app:get-state', appId),
+  appGetActivity: (input) => ipcRenderer.invoke('app:get-activity', input),
+  appGetSession: (input) => ipcRenderer.invoke('app:get-session', input),
+  appRespondEscalation: (input) => ipcRenderer.invoke('app:respond-escalation', input),
+  appUpdateConfig: (input) => ipcRenderer.invoke('app:update-config', input),
+  appUpdateFrequency: (input) => ipcRenderer.invoke('app:update-frequency', input),
+  appUpdateOverrides: (input) => ipcRenderer.invoke('app:update-overrides', input),
+  appUpdateSpec: (input) => ipcRenderer.invoke('app:update-spec', input),
+  appGrantPermission: (input) => ipcRenderer.invoke('app:grant-permission', input),
+  appRevokePermission: (input) => ipcRenderer.invoke('app:revoke-permission', input),
+
+  // App Import / Export
+  appExportSpec: (appId) => ipcRenderer.invoke('app:export-spec', appId),
+  appImportSpec: (input) => ipcRenderer.invoke('app:import-spec', input),
+
+  // App Chat
+  appChatSend: (request) => ipcRenderer.invoke('app:chat-send', request),
+  appChatStop: (appId) => ipcRenderer.invoke('app:chat-stop', appId),
+  appChatStatus: (appId) => ipcRenderer.invoke('app:chat-status', appId),
+  appChatMessages: (input) => ipcRenderer.invoke('app:chat-messages', input),
+  appChatSessionState: (appId) => ipcRenderer.invoke('app:chat-session-state', appId),
+
+  // App Event Listeners
+  onAppStatusChanged: (callback) => createEventListener('app:status_changed', callback),
+  onAppActivityEntry: (callback) => createEventListener('app:activity_entry:new', callback),
+  onAppEscalation: (callback) => createEventListener('app:escalation:new', callback),
+  onAppNavigate: (callback) => createEventListener('app:navigate', callback),
+
+  // Store (App Registry)
+  storeListApps: (query) => ipcRenderer.invoke('store:list-apps', query),
+  storeGetAppDetail: (slug) => ipcRenderer.invoke('store:get-app-detail', slug),
+  storeInstall: (input) => ipcRenderer.invoke('store:install', input),
+  storeRefresh: () => ipcRenderer.invoke('store:refresh'),
+  storeCheckUpdates: () => ipcRenderer.invoke('store:check-updates'),
+  storeGetRegistries: () => ipcRenderer.invoke('store:get-registries'),
+  storeAddRegistry: (input) => ipcRenderer.invoke('store:add-registry', input),
+  storeRemoveRegistry: (registryId) => ipcRenderer.invoke('store:remove-registry', registryId),
+  storeToggleRegistry: (input) => ipcRenderer.invoke('store:toggle-registry', input),
+
+  // Notification (in-app toast)
+  onNotificationToast: (callback) => createEventListener('notification:toast', callback),
 }
 
 contextBridge.exposeInMainWorld('halo', api)

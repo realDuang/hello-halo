@@ -14,7 +14,9 @@ import * as agentController from '../../controllers/agent.controller'
 import * as spaceController from '../../controllers/space.controller'
 import * as conversationController from '../../controllers/conversation.controller'
 import * as configController from '../../controllers/config.controller'
-import { getEnabledAuthProviderConfigs } from '../../services/ai-sources'
+import { getEnabledAuthProviderConfigs, getAISourceManager } from '../../services/ai-sources'
+import { testChannel, clearAllTokenCaches } from '../../services/notify-channels'
+import type { NotificationChannelType } from '../../../shared/types/notification-channels'
 import {
   listArtifacts,
   listArtifactsTree,
@@ -23,8 +25,18 @@ import {
   saveArtifactContent,
   detectFileType
 } from '../../services/artifact.service'
-import { getTempSpacePath, getSpacesDir } from '../../services/config.service'
+import { getTempSpacePath, getSpacesDir, getConfig as getServiceConfig } from '../../services/config.service'
 import { getSpace, getAllSpacePaths } from '../../services/space.service'
+import { getMainWindow } from '../../services/window.service'
+import { getAppManager } from '../../apps/manager'
+import { getAppRuntime, sendAppChatMessage, stopAppChat, isAppChatGenerating, loadAppChatMessages, getAppChatSessionState, getAppChatConversationId } from '../../apps/runtime'
+import type { AppListFilter, UninstallOptions } from '../../apps/manager'
+import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
+import { readSessionMessages } from '../../apps/runtime/session-store'
+import { broadcastToAll } from '../websocket'
+import * as appController from '../../controllers/app.controller'
+import type { AppErrorCode } from '../../controllers/app.controller'
+import * as storeController from '../../controllers/store.controller'
 
 // Helper: get working directory for a space
 function getWorkingDir(spaceId: string): string {
@@ -131,6 +143,71 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
     const { apiKey, apiUrl, provider, model } = req.body
     const result = await configController.validateApi(apiKey, apiUrl, provider, model)
     res.json(result)
+  })
+
+  app.post('/api/config/fetch-models', async (req: Request, res: Response) => {
+    const { apiKey, apiUrl } = req.body
+    const result = await configController.fetchModels(apiKey, apiUrl)
+    res.json(result)
+  })
+
+  // ===== AI Sources CRUD Routes (atomic operations) =====
+  // These routes read from disk before writing, ensuring rotating tokens are never overwritten.
+
+  app.post('/api/ai-sources/switch-source', async (req: Request, res: Response) => {
+    try {
+      const { sourceId } = req.body
+      const manager = getAISourceManager()
+      const result = manager.setCurrentSource(sourceId)
+      if (result.currentId !== sourceId) {
+        res.json({ success: false, error: `Source not found: ${sourceId}` })
+        return
+      }
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.post('/api/ai-sources/set-model', async (req: Request, res: Response) => {
+    try {
+      const { modelId } = req.body
+      const manager = getAISourceManager()
+      const result = manager.setCurrentModel(modelId)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.post('/api/ai-sources/sources', async (req: Request, res: Response) => {
+    try {
+      const manager = getAISourceManager()
+      const result = manager.addSource(req.body)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.put('/api/ai-sources/sources/:sourceId', async (req: Request, res: Response) => {
+    try {
+      const manager = getAISourceManager()
+      const result = manager.updateSource(req.params.sourceId, req.body)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.delete('/api/ai-sources/sources/:sourceId', async (req: Request, res: Response) => {
+    try {
+      const manager = getAISourceManager()
+      const result = manager.deleteSource(req.params.sourceId)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
   })
 
   // ===== Auth Routes (Read-only for remote access) =====
@@ -551,11 +628,770 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
     }
   })
 
+  // ===== Notification Channels Routes =====
+  app.post('/api/notify-channels/test', async (req: Request, res: Response) => {
+    try {
+      const { channelType } = req.body as { channelType?: string }
+      if (!channelType) {
+        res.status(400).json({ success: false, error: 'Missing channelType' })
+        return
+      }
+      const config = getServiceConfig()
+      const channelsConfig = config.notificationChannels
+      if (!channelsConfig) {
+        res.json({ success: false, error: 'No notification channels configured' })
+        return
+      }
+      const result = await testChannel(channelType as NotificationChannelType, channelsConfig)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.post('/api/notify-channels/clear-cache', async (req: Request, res: Response) => {
+    try {
+      clearAllTokenCaches()
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // ===== System Routes =====
   app.get('/api/system/version', async (req: Request, res: Response) => {
     try {
       const version = electronApp.getVersion()
       res.json({ success: true, data: version })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ===== Apps Routes =====
+
+  // Helper: get manager or return 503
+  function getManagerOrFail(res: Response): ReturnType<typeof getAppManager> {
+    const manager = getAppManager()
+    if (!manager) {
+      res.status(503).json({ success: false, error: 'App Manager is not yet initialized. Please try again shortly.' })
+    }
+    return manager
+  }
+
+  // Helper: get runtime or return 503
+  function getRuntimeOrFail(res: Response): ReturnType<typeof getAppRuntime> {
+    const runtime = getAppRuntime()
+    if (!runtime) {
+      res.status(503).json({ success: false, error: 'App Runtime is not yet initialized. Please try again shortly.' })
+    }
+    return runtime
+  }
+
+  // GET /api/apps — list all installed Apps, optional ?spaceId=
+  app.get('/api/apps', async (req: Request, res: Response) => {
+    try {
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const filter: AppListFilter = {}
+      if (typeof req.query.spaceId === 'string' && req.query.spaceId) {
+        filter.spaceId = req.query.spaceId
+      }
+      const apps = manager.listApps(filter)
+      console.log('[HTTP] GET /api/apps: count=%d', apps.length)
+      res.json({ success: true, data: apps })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/install — install an App
+  app.post('/api/apps/install', async (req: Request, res: Response) => {
+    try {
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const { spaceId, spec, userConfig } = req.body as {
+        spaceId?: string
+        spec?: unknown
+        userConfig?: Record<string, unknown>
+      }
+      if (!spaceId || typeof spaceId !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing required field: spaceId' })
+        return
+      }
+      if (!spec || typeof spec !== 'object') {
+        res.status(400).json({ success: false, error: 'Missing required field: spec' })
+        return
+      }
+      const appId = await manager.install(spaceId, spec as import('../../apps/spec').AppSpec, userConfig)
+
+      // Auto-activate in runtime if available
+      const runtime = getAppRuntime()
+      if (runtime && (spec as { type?: string }).type === 'automation') {
+        await runtime.activate(appId).catch((err: Error) => {
+          console.warn(`[HTTP] POST /api/apps/install -- runtime activate failed (non-fatal): ${err.message}`)
+        })
+      }
+
+      console.log('[HTTP] POST /api/apps/install: appId=%s, space=%s', appId, spaceId)
+      res.json({ success: true, data: { appId } })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId — get a single App
+  app.get('/api/apps/:appId', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const appData = manager.getApp(appId)
+      res.json({ success: true, data: appData })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // DELETE /api/apps/:appId — uninstall (soft-delete) an App
+  app.delete('/api/apps/:appId', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+
+      // Deactivate in runtime first
+      const runtime = getAppRuntime()
+      if (runtime) {
+        await runtime.deactivate(appId).catch((err: Error) => {
+          console.warn(`[HTTP] DELETE /api/apps/:appId -- runtime deactivate failed (non-fatal): ${err.message}`)
+        })
+      }
+
+      const options: UninstallOptions = {}
+      if (req.query.purge === 'true') options.purge = true
+      await manager.uninstall(appId, options)
+      console.log('[HTTP] DELETE /api/apps/%s', appId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/reinstall — reinstall a previously uninstalled App
+  app.post('/api/apps/:appId/reinstall', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+
+      manager.reinstall(appId)
+
+      // Re-activate in runtime
+      const runtime = getAppRuntime()
+      let activationWarning: string | undefined
+      if (runtime) {
+        try {
+          await runtime.activate(appId)
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err)
+          console.warn(`[HTTP] POST /api/apps/:appId/reinstall -- runtime activate failed: ${errMsg}`)
+          activationWarning = errMsg
+        }
+      }
+
+      console.log('[HTTP] POST /api/apps/%s/reinstall', appId)
+      res.json({ success: true, data: { activationWarning } })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // DELETE /api/apps/:appId/permanent — permanently delete an uninstalled App
+  app.delete('/api/apps/:appId/permanent', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+
+      await manager.deleteApp(appId)
+      broadcastToAll('app:deleted', { appId })
+      console.log('[HTTP] DELETE /api/apps/%s/permanent', appId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/pause — pause an App
+  app.post('/api/apps/:appId/pause', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      manager.pause(appId)
+
+      const runtime = getAppRuntime()
+      if (runtime) {
+        await runtime.deactivate(appId).catch((err: Error) => {
+          console.warn(`[HTTP] POST /api/apps/:appId/pause -- runtime deactivate failed (non-fatal): ${err.message}`)
+        })
+      }
+
+      console.log('[HTTP] POST /api/apps/%s/pause', appId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/resume — resume an App
+  app.post('/api/apps/:appId/resume', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      manager.resume(appId)
+
+      const runtime = getAppRuntime()
+      if (runtime) {
+        await runtime.activate(appId).catch((err: Error) => {
+          console.warn(`[HTTP] POST /api/apps/:appId/resume -- runtime activate failed (non-fatal): ${err.message}`)
+        })
+      }
+
+      console.log('[HTTP] POST /api/apps/%s/resume', appId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/trigger — manually trigger a run
+  app.post('/api/apps/:appId/trigger', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const result = await runtime.triggerManually(appId)
+      console.log('[HTTP] POST /api/apps/%s/trigger: outcome=%s', appId, result.outcome)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/activity — get activity entries
+  app.get('/api/apps/:appId/activity', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const options: ActivityQueryOptions = {}
+      if (req.query.limit) options.limit = Number(req.query.limit)
+      if (req.query.before) options.since = Number(req.query.before)
+      const entries = runtime.getActivityEntries(appId, options)
+      res.json({ success: true, data: entries })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/escalation/:entryId/respond — respond to escalation
+  app.post('/api/apps/:appId/escalation/:entryId/respond', async (req: Request, res: Response) => {
+    try {
+      const { appId, entryId } = req.params
+      if (!appId || !entryId) {
+        res.status(400).json({ success: false, error: 'Missing appId or entryId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const { choice, text } = req.body as { choice?: string; text?: string }
+      const response: EscalationResponse = {
+        ts: Date.now(),
+        choice,
+        text,
+      }
+      await runtime.respondToEscalation(appId, entryId, response)
+      console.log('[HTTP] POST /api/apps/%s/escalation/%s/respond', appId, entryId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/runs/:runId/session — get session messages for "View process"
+  app.get('/api/apps/:appId/runs/:runId/session', async (req: Request, res: Response) => {
+    try {
+      const { appId, runId } = req.params
+      if (!appId || !runId) {
+        res.status(400).json({ success: false, error: 'Missing appId or runId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+
+      const appData = manager.getApp(appId)
+      if (!appData) {
+        res.status(404).json({ success: false, error: `App not found: ${appId}` })
+        return
+      }
+
+      const space = getSpace(appData.spaceId)
+      if (!space?.path) {
+        res.status(404).json({ success: false, error: `Space not found for app: ${appId}` })
+        return
+      }
+
+      const messages = readSessionMessages(space.path, appId, runId)
+      res.json({ success: true, data: messages })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/config — update user configuration
+  app.post('/api/apps/:appId/config', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const config = req.body as Record<string, unknown>
+      manager.updateConfig(appId, config)
+      console.log('[HTTP] POST /api/apps/%s/config', appId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/frequency — update subscription frequency override
+  app.post('/api/apps/:appId/frequency', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const { subscriptionId, frequency } = req.body as { subscriptionId?: string; frequency?: string }
+      if (!subscriptionId || !frequency) {
+        res.status(400).json({ success: false, error: 'Missing subscriptionId or frequency' })
+        return
+      }
+      manager.updateFrequency(appId, subscriptionId, frequency)
+      console.log('[HTTP] POST /api/apps/%s/frequency: sub=%s', appId, subscriptionId)
+
+      // Hot-sync scheduler job so the new frequency takes effect immediately
+      const runtime = getAppRuntime()
+      if (runtime) {
+        runtime.syncAppSchedule(appId)
+      }
+
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // PATCH /api/apps/:appId/spec — update app spec (JSON Merge Patch)
+  app.patch('/api/apps/:appId/spec', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const specPatch = req.body as Record<string, unknown>
+      manager.updateSpec(appId, specPatch)
+
+      // Reactivate runtime if subscriptions changed
+      if (specPatch.subscriptions) {
+        const runtime = getAppRuntime()
+        const appData = manager.getApp(appId)
+        if (runtime && appData?.status === 'active') {
+          await runtime.deactivate(appId).catch(() => {})
+          await runtime.activate(appId).catch((err: Error) => {
+            console.warn('[HTTP] PATCH /api/apps/:appId/spec -- reactivation failed (non-fatal): %s', err.message)
+          })
+        }
+      }
+
+      console.log('[HTTP] PATCH /api/apps/%s/spec', appId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/state — get real-time AutomationAppState
+  app.get('/api/apps/:appId/state', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const state = runtime.getAppState(appId)
+      res.json({ success: true, data: state })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ── App Export / Import Routes ──────────────────────────────────────────
+
+  // Map controller error codes to HTTP status codes
+  const appErrorStatus: Record<AppErrorCode, number> = {
+    NOT_INITIALIZED: 503,
+    NOT_FOUND: 404,
+    INVALID_YAML: 400,
+    VALIDATION_FAILED: 422,
+  }
+
+  // GET /api/apps/:appId/export-spec — export app spec as YAML
+  app.get('/api/apps/:appId/export-spec', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+
+      const result = appController.exportSpec(appId)
+      if (!result.success) {
+        const status = result.code ? appErrorStatus[result.code] : 400
+        res.status(status).json({ success: false, error: result.error })
+        return
+      }
+
+      console.log('[HTTP] GET /api/apps/%s/export-spec', appId)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/import-spec — install an app from a YAML spec string
+  app.post('/api/apps/import-spec', async (req: Request, res: Response) => {
+    try {
+      const { spaceId, yamlContent, userConfig } = req.body as {
+        spaceId?: string
+        yamlContent?: string
+        userConfig?: Record<string, unknown>
+      }
+
+      if (!spaceId || typeof spaceId !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing or invalid spaceId' })
+        return
+      }
+      if (!yamlContent || typeof yamlContent !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing or invalid yamlContent' })
+        return
+      }
+
+      const result = await appController.importSpec({ spaceId, yamlContent, userConfig })
+      if (!result.success) {
+        const status = result.code ? appErrorStatus[result.code] : 400
+        res.status(status).json({ success: false, error: result.error })
+        return
+      }
+
+      console.log('[HTTP] POST /api/apps/import-spec: appId=%s, space=%s', result.data.appId, spaceId)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ── App Chat Routes ─────────────────────────────────────────────────────
+
+  // POST /api/apps/:appId/chat/send — send a chat message to an App's AI agent
+  app.post('/api/apps/:appId/chat/send', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const request: AppChatRequest = { ...req.body, appId }
+      sendAppChatMessage(getMainWindow(), request).catch((error: unknown) => {
+        const err = error as Error
+        console.error(`[HTTP] POST /api/apps/:appId/chat/send background error:`, err.message)
+      })
+      console.log('[HTTP] POST /api/apps/%s/chat/send', appId)
+      res.json({
+        success: true,
+        data: { conversationId: getAppChatConversationId(appId) }
+      })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/chat/stop — stop an active app chat generation
+  app.post('/api/apps/:appId/chat/stop', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      await stopAppChat(appId)
+      console.log('[HTTP] POST /api/apps/%s/chat/stop', appId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/chat/status — get app chat status
+  app.get('/api/apps/:appId/chat/status', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      res.json({
+        success: true,
+        data: {
+          isGenerating: isAppChatGenerating(appId),
+          conversationId: getAppChatConversationId(appId),
+        }
+      })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/chat/messages — load persisted chat messages
+  app.get('/api/apps/:appId/chat/messages', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const appData = manager.getApp(appId)
+      if (!appData) {
+        res.status(404).json({ success: false, error: `App not found: ${appId}` })
+        return
+      }
+      const space = getSpace(appData.spaceId)
+      if (!space?.path) {
+        res.json({ success: true, data: [] })
+        return
+      }
+      const messages = loadAppChatMessages(space.path, appId)
+      res.json({ success: true, data: messages })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/chat/session-state — get session state for recovery
+  app.get('/api/apps/:appId/chat/session-state', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const state = getAppChatSessionState(appId)
+      res.json({ success: true, data: state })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ===== Store (App Registry) Routes =====
+
+  // GET /api/store/apps — list apps from the store
+  app.get('/api/store/apps', async (req: Request, res: Response) => {
+    try {
+      const query: { search?: string; locale?: string; category?: string; type?: string; tags?: string[] } = {}
+      if (typeof req.query.search === 'string') query.search = req.query.search
+      if (typeof req.query.locale === 'string') query.locale = req.query.locale
+      if (typeof req.query.category === 'string') query.category = req.query.category
+      if (typeof req.query.type === 'string') query.type = req.query.type
+      if (typeof req.query.tags === 'string') {
+        query.tags = req.query.tags.split(',').map(tag => tag.trim()).filter(Boolean)
+      } else if (Array.isArray(req.query.tags)) {
+        query.tags = req.query.tags
+          .filter((tag): tag is string => typeof tag === 'string')
+          .map(tag => tag.trim())
+          .filter(Boolean)
+      }
+      const result = await storeController.listStoreApps(query)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/apps/:slug — get store app detail
+  app.get('/api/store/apps/:slug', async (req: Request, res: Response) => {
+    try {
+      const result = await storeController.getStoreAppDetail(req.params.slug)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/install — install an app from the store
+  app.post('/api/store/install', async (req: Request, res: Response) => {
+    try {
+      const { slug, spaceId, userConfig } = req.body as {
+        slug?: string
+        spaceId?: string
+        userConfig?: Record<string, unknown>
+      }
+      if (!slug || typeof slug !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing required field: slug' })
+        return
+      }
+      if (!spaceId || typeof spaceId !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing required field: spaceId' })
+        return
+      }
+      const result = await storeController.installStoreApp(slug, spaceId, userConfig)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/apps/:slug/install — REST-style install route
+  app.post('/api/store/apps/:slug/install', async (req: Request, res: Response) => {
+    try {
+      const slug = req.params.slug
+      const { spaceId, userConfig } = req.body as {
+        spaceId?: string
+        userConfig?: Record<string, unknown>
+      }
+      if (!slug || typeof slug !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing required param: slug' })
+        return
+      }
+      if (!spaceId || typeof spaceId !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing required field: spaceId' })
+        return
+      }
+      const result = await storeController.installStoreApp(slug, spaceId, userConfig)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/refresh — refresh the registry index
+  app.post('/api/store/refresh', async (req: Request, res: Response) => {
+    try {
+      const result = await storeController.refreshStoreIndex()
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/updates — check for available updates
+  app.get('/api/store/updates', async (req: Request, res: Response) => {
+    try {
+      const result = await storeController.checkStoreUpdates()
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/registries — get configured registry sources
+  app.get('/api/store/registries', async (req: Request, res: Response) => {
+    try {
+      const result = storeController.getStoreRegistries()
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/registries — add a new registry source
+  app.post('/api/store/registries', async (req: Request, res: Response) => {
+    try {
+      const result = storeController.addStoreRegistry(req.body)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // DELETE /api/store/registries/:registryId — remove a registry source
+  app.delete('/api/store/registries/:registryId', async (req: Request, res: Response) => {
+    try {
+      const result = storeController.removeStoreRegistry(req.params.registryId)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/registries/:registryId/toggle — enable or disable a registry source
+  app.post('/api/store/registries/:registryId/toggle', async (req: Request, res: Response) => {
+    try {
+      const { enabled } = req.body as { enabled?: boolean }
+      if (typeof enabled !== 'boolean') {
+        res.status(400).json({ success: false, error: 'Missing required field: enabled' })
+        return
+      }
+      const result = storeController.toggleStoreRegistry(req.params.registryId, enabled)
+      res.json(result)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

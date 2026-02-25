@@ -9,7 +9,7 @@ import {
   getCurrentModelName,
   hasAnyAISource
 } from '../../shared/types/ai-sources';
-
+import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
 // Re-export them
 export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
@@ -191,6 +191,7 @@ export interface HaloConfig {
   remoteAccess: RemoteAccessConfig;
   mcpServers: McpServersConfig;  // MCP servers configuration
   notifications?: NotificationConfig;  // Notification preferences
+  notificationChannels?: NotificationChannelsConfig;  // External notification channels
   agent?: AgentConfig;  // Agent behavior settings
   layout?: LayoutConfig;  // Global layout preferences (panel sizes and visibility)
   isFirstLaunch: boolean;
@@ -587,7 +588,7 @@ export type AgentEvent =
 // App State Types
 // ============================================
 
-export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings';
+export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps';
 
 export interface AppState {
   view: AppView;

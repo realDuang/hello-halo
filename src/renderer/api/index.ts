@@ -131,11 +131,57 @@ export const api = {
     return httpRequest('POST', '/api/config/validate', { apiKey, apiUrl, provider, model })
   },
 
+  fetchModels: async (
+    apiKey: string,
+    apiUrl: string
+  ): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.fetchModels(apiKey, apiUrl)
+    }
+    return httpRequest('POST', '/api/config/fetch-models', { apiKey, apiUrl })
+  },
+
   refreshAISourcesConfig: async (): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.refreshAISourcesConfig()
     }
     return httpRequest('POST', '/api/config/refresh-ai-sources')
+  },
+
+  // ===== AI Sources CRUD (atomic - backend reads from disk, never overwrites rotating tokens) =====
+  aiSourcesSwitchSource: async (sourceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.aiSourcesSwitchSource(sourceId)
+    }
+    return httpRequest('POST', '/api/ai-sources/switch-source', { sourceId })
+  },
+
+  aiSourcesSetModel: async (modelId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.aiSourcesSetModel(modelId)
+    }
+    return httpRequest('POST', '/api/ai-sources/set-model', { modelId })
+  },
+
+  aiSourcesAddSource: async (source: unknown): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.aiSourcesAddSource(source)
+    }
+    return httpRequest('POST', '/api/ai-sources/sources', source as Record<string, unknown>)
+  },
+
+  aiSourcesUpdateSource: async (sourceId: string, updates: unknown): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.aiSourcesUpdateSource(sourceId, updates)
+    }
+    return httpRequest('PUT', `/api/ai-sources/sources/${sourceId}`, updates as Record<string, unknown>)
+  },
+
+  aiSourcesDeleteSource: async (sourceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.aiSourcesDeleteSource(sourceId)
+    }
+    return httpRequest('DELETE', `/api/ai-sources/sources/${sourceId}`)
   },
 
   // ===== Space =====
@@ -770,6 +816,21 @@ export const api = {
     return window.halo.onWindowMaximizeChange(callback)
   },
 
+  // ===== Notification Channels =====
+  testNotificationChannel: async (channelType: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.testNotificationChannel(channelType)
+    }
+    return httpRequest('POST', '/api/notify-channels/test', { channelType })
+  },
+
+  clearNotificationChannelCache: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.clearNotificationChannelCache()
+    }
+    return httpRequest('POST', '/api/notify-channels/clear-cache')
+  },
+
   // ===== Event Listeners =====
   onAgentMessage: (callback: (data: unknown) => void) =>
     onEvent('agent:message', callback),
@@ -1025,6 +1086,20 @@ export const api = {
     return window.halo.onUpdaterStatus(callback)
   },
 
+  // ===== Notification (in-app toast) =====
+  onNotificationToast: (callback: (data: {
+    title: string
+    body?: string
+    variant?: 'default' | 'success' | 'warning' | 'error'
+    duration?: number
+    appId?: string
+  }) => void) => {
+    if (!isElectron()) {
+      return () => { } // No-op in remote mode
+    }
+    return window.halo.onNotificationToast(callback)
+  },
+
   // ===== Overlay (Electron only) =====
   // Used for floating UI elements that need to render above BrowserViews
   showChatCapsuleOverlay: async (): Promise<ApiResponse> => {
@@ -1230,6 +1305,292 @@ export const api = {
       return { success: false, error: 'Only available in desktop app' }
     }
     return window.halo.runHealthCheck()
+  },
+
+  // ===== Apps =====
+  appList: async (filter?: { spaceId?: string; status?: string; type?: string }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appList(filter)
+    }
+    const params = new URLSearchParams()
+    if (filter?.spaceId) params.set('spaceId', filter.spaceId)
+    if (filter?.status) params.set('status', filter.status)
+    if (filter?.type) params.set('type', filter.type)
+    const qs = params.toString()
+    return httpRequest('GET', `/api/apps${qs ? '?' + qs : ''}`)
+  },
+
+  appGet: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGet(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}`)
+  },
+
+  appInstall: async (input: { spaceId: string; spec: unknown; userConfig?: Record<string, unknown> }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appInstall(input)
+    }
+    return httpRequest('POST', '/api/apps/install', input as Record<string, unknown>)
+  },
+
+  appUninstall: async (appId: string, options?: { purge?: boolean }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appUninstall({ appId, options })
+    }
+    const qs = options?.purge ? '?purge=true' : ''
+    return httpRequest('DELETE', `/api/apps/${appId}${qs}`)
+  },
+
+  appReinstall: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appReinstall({ appId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/reinstall`)
+  },
+
+  appDelete: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appDelete({ appId })
+    }
+    return httpRequest('DELETE', `/api/apps/${appId}/permanent`)
+  },
+
+  appPause: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appPause(appId)
+    }
+    return httpRequest('POST', `/api/apps/${appId}/pause`)
+  },
+
+  appResume: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appResume(appId)
+    }
+    return httpRequest('POST', `/api/apps/${appId}/resume`)
+  },
+
+  appTrigger: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appTrigger(appId)
+    }
+    return httpRequest('POST', `/api/apps/${appId}/trigger`)
+  },
+
+  appGetState: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetState(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/state`)
+  },
+
+  appGetActivity: async (appId: string, options?: { limit?: number; offset?: number; type?: string; since?: number }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetActivity({ appId, options })
+    }
+    const params = new URLSearchParams()
+    if (options?.limit) params.set('limit', String(options.limit))
+    if (options?.offset) params.set('offset', String(options.offset))
+    if (options?.since) params.set('before', String(options.since))
+    const qs = params.toString()
+    return httpRequest('GET', `/api/apps/${appId}/activity${qs ? '?' + qs : ''}`)
+  },
+
+  appGetSession: async (appId: string, runId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetSession({ appId, runId })
+    }
+    return httpRequest('GET', `/api/apps/${appId}/runs/${runId}/session`)
+  },
+
+  appRespondEscalation: async (appId: string, escalationId: string, response: { choice?: string; text?: string }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appRespondEscalation({
+        appId,
+        escalationId,
+        response: { ts: Date.now(), ...response },
+      })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/escalation/${escalationId}/respond`, response as Record<string, unknown>)
+  },
+
+  appUpdateConfig: async (appId: string, config: Record<string, unknown>): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appUpdateConfig({ appId, config })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/config`, config)
+  },
+
+  appUpdateFrequency: async (appId: string, subscriptionId: string, frequency: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appUpdateFrequency({ appId, subscriptionId, frequency })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/frequency`, { subscriptionId, frequency })
+  },
+
+  appUpdateOverrides: async (appId: string, overrides: Record<string, unknown>): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appUpdateOverrides({ appId, overrides })
+    }
+    return httpRequest('PATCH', `/api/apps/${appId}/overrides`, overrides)
+  },
+
+  appUpdateSpec: async (appId: string, specPatch: Record<string, unknown>): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appUpdateSpec({ appId, specPatch })
+    }
+    return httpRequest('PATCH', `/api/apps/${appId}/spec`, specPatch)
+  },
+
+  appGrantPermission: async (appId: string, permission: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGrantPermission({ appId, permission })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/permissions/grant`, { permission })
+  },
+
+  appRevokePermission: async (appId: string, permission: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appRevokePermission({ appId, permission })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/permissions/revoke`, { permission })
+  },
+
+  // App Import / Export
+  appExportSpec: async (appId: string): Promise<ApiResponse<{ yaml: string; filename: string }>> => {
+    if (isElectron()) {
+      return window.halo.appExportSpec(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/export-spec`)
+  },
+
+  appImportSpec: async (input: { spaceId: string; yamlContent: string; userConfig?: Record<string, unknown> }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appImportSpec(input)
+    }
+    return httpRequest('POST', '/api/apps/import-spec', input as Record<string, unknown>)
+  },
+
+  // App Chat
+  appChatSend: async (request: { appId: string; spaceId: string; message: string; thinkingEnabled?: boolean }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appChatSend(request)
+    }
+    return httpRequest('POST', `/api/apps/${request.appId}/chat/send`, request as unknown as Record<string, unknown>)
+  },
+
+  appChatStop: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appChatStop(appId)
+    }
+    return httpRequest('POST', `/api/apps/${appId}/chat/stop`)
+  },
+
+  appChatStatus: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appChatStatus(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/chat/status`)
+  },
+
+  appChatMessages: async (appId: string, spaceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appChatMessages({ appId, spaceId })
+    }
+    return httpRequest('GET', `/api/apps/${appId}/chat/messages?spaceId=${spaceId}`)
+  },
+
+  appChatSessionState: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appChatSessionState(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/chat/session-state`)
+  },
+
+  // App Event Listeners
+  onAppStatusChanged: (callback: (data: unknown) => void) =>
+    onEvent('app:status_changed', callback),
+
+  onAppActivityEntry: (callback: (data: unknown) => void) =>
+    onEvent('app:activity_entry:new', callback),
+
+  onAppEscalation: (callback: (data: unknown) => void) =>
+    onEvent('app:escalation:new', callback),
+
+  onAppNavigate: (callback: (data: unknown) => void) =>
+    onEvent('app:navigate', callback),
+
+  // ===== Store (App Registry) =====
+  storeListApps: async (query: { search?: string; locale?: string; category?: string; type?: string; tags?: string[] }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeListApps(query)
+    }
+    const params = new URLSearchParams()
+    if (query.search) params.set('search', query.search)
+    if (query.locale) params.set('locale', query.locale)
+    if (query.category) params.set('category', query.category)
+    if (query.type) params.set('type', query.type)
+    if (query.tags && query.tags.length > 0) {
+      params.set('tags', query.tags.join(','))
+    }
+    const qs = params.toString()
+    return httpRequest('GET', `/api/store/apps${qs ? '?' + qs : ''}`)
+  },
+
+  storeGetAppDetail: async (slug: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeGetAppDetail(slug)
+    }
+    return httpRequest('GET', `/api/store/apps/${slug}`)
+  },
+
+  storeInstall: async (slug: string, spaceId: string, userConfig?: Record<string, unknown>): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeInstall({ slug, spaceId, userConfig })
+    }
+    return httpRequest('POST', `/api/store/apps/${slug}/install`, { spaceId, userConfig })
+  },
+
+  storeRefresh: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeRefresh()
+    }
+    return httpRequest('POST', '/api/store/refresh')
+  },
+
+  storeCheckUpdates: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeCheckUpdates()
+    }
+    return httpRequest('GET', '/api/store/updates')
+  },
+
+  storeGetRegistries: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeGetRegistries()
+    }
+    return httpRequest('GET', '/api/store/registries')
+  },
+
+  storeAddRegistry: async (input: { name: string; url: string }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeAddRegistry(input)
+    }
+    return httpRequest('POST', '/api/store/registries', input)
+  },
+
+  storeRemoveRegistry: async (registryId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeRemoveRegistry(registryId)
+    }
+    return httpRequest('DELETE', `/api/store/registries/${registryId}`)
+  },
+
+  storeToggleRegistry: async (registryId: string, enabled: boolean): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeToggleRegistry({ registryId, enabled })
+    }
+    return httpRequest('POST', `/api/store/registries/${registryId}/toggle`, { enabled })
   },
 }
 
