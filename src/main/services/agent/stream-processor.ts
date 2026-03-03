@@ -73,6 +73,8 @@ export interface StreamResult {
   hasErrorThought: boolean
   /** The error thought itself, if any */
   errorThought?: Thought
+  /** Whether the session hit the SDK's maxTurns limit (error_max_turns subtype) */
+  reachedMaxTurns: boolean
 }
 
 /**
@@ -154,6 +156,8 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
 
   // Track if SDK reported error_during_execution (for interrupted detection)
   let hadErrorDuringExecution = false
+  // Track if SDK reported error_max_turns (session hit the configured maxTurns limit)
+  let hadMaxTurnsReached = false
   // Track if we received a result message (for detecting stream interruption)
   let receivedResult = false
 
@@ -630,6 +634,11 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         // Mark as interrupted - will be used for empty response handling
         hadErrorDuringExecution = true
         console.log(`[Agent][${conversationId}] SDK result subtype=error_during_execution but is_error=false, errors=[] - marked as interrupted`)
+      } else if ((sdkMessage as any).subtype === 'error_max_turns') {
+        // Session hit the configured maxTurns limit - this is a graceful SDK termination,
+        // not an error. Track it so we can show a clear message instead of "empty response".
+        hadMaxTurnsReached = true
+        console.log(`[Agent][${conversationId}] SDK result subtype=error_max_turns, num_turns=${(sdkMessage as any).num_turns} - session reached turn limit`)
       }
 
       // Extract token usage from result message
@@ -643,15 +652,16 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // ========== Stream End Handling ==========
   //
   // Error conditions (truth table):
-  // | Case | hasContent | isInterrupted | hasErrorThought | wasAborted | Send error?      |
-  // |------|------------|---------------|-----------------|------------|------------------|
-  // | 1a   | yes        | -             | -               | yes        | stopped by user  |
-  // | 1b   | yes        | yes           | -               | no         | interrupted      |
-  // | 2    | yes        | no            | -               | no         | no               |
-  // | 3    | no         | yes           | no              | no         | interrupted      |
-  // | 4    | no         | no            | no              | no         | empty response   |
-  // | 5    | no         | -             | yes             | -          | no               |
-  // | 6    | no         | -             | -               | yes        | no               |
+  // | Case | hasContent | isInterrupted | hasErrorThought | wasAborted | reachedMaxTurns | Send error?      |
+  // |------|------------|---------------|-----------------|------------|-----------------|------------------|
+  // | 1a   | yes        | -             | -               | yes        | -               | stopped by user  |
+  // | 1b   | yes        | yes           | -               | no         | -               | interrupted      |
+  // | 2    | yes        | no            | -               | no         | -               | no               |
+  // | 3    | no         | yes           | no              | no         | -               | interrupted      |
+  // | 4    | no         | no            | no              | no         | no              | empty response   |
+  // | 5    | no         | -             | yes             | -          | -               | no               |
+  // | 6    | no         | -             | -               | yes        | -               | no               |
+  // | 7    | no         | no            | no              | no         | yes             | max turns notice |
 
   // Merge content: prefer lastTextContent (confirmed), fallback to currentStreamingText (accumulated)
   const finalContent = lastTextContent || currentStreamingText || ''
@@ -685,20 +695,49 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     isInterrupted,
     wasAborted,
     hasErrorThought,
-    errorThought
+    errorThought,
+    reachedMaxTurns: hadMaxTurnsReached
   }
 
   // Notify caller for storage handling
   callbacks.onComplete(result)
 
-  // Send complete event and interrupted-error unless caller suppresses them
-  // (message queue loop suppresses to send a single complete after all turns)
-  if (!skipCompleteEvent) {
-    // Always send complete event to unblock frontend
-    sendToRenderer('agent:complete', spaceId, conversationId, {
-      type: 'complete',
-      duration: 0,
-      tokenUsage
+  // Always send complete event to unblock frontend
+  sendToRenderer('agent:complete', spaceId, conversationId, {
+    type: 'complete',
+    duration: 0,
+    tokenUsage
+  })
+
+  // Determine if interrupted error should be sent
+  const getInterruptedErrorMessage = (): string | null => {
+    if (finalContent) {
+      // Has content: user aborted shows friendly message, other interrupts show warning
+      if (wasAborted) return 'Stopped by user.'
+      return isInterrupted ? 'Model response interrupted unexpectedly.' : null
+    } else {
+      // No content: skip if already has error thought or user aborted
+      if (hasErrorThought || wasAborted) return null
+      // Max turns is a graceful SDK limit, not a crash — show a clear actionable message
+      if (hadMaxTurnsReached) return 'Reached the maximum turn limit. Send a message to continue.'
+      return isInterrupted
+        ? 'Model response interrupted unexpectedly.'
+        : `Unexpected empty response. ${FALLBACK_ERROR_HINT}`
+    }
+  }
+
+  const errorMessage = getInterruptedErrorMessage()
+  if (errorMessage) {
+    const reason = hadMaxTurnsReached
+      ? 'max_turns'
+      : isInterrupted
+        ? (hadErrorDuringExecution ? 'error_during_execution' : 'stream interrupted')
+        : 'empty response'
+    console.log(`[Agent][${conversationId}] Sending interrupted error (${reason}, content: ${finalContent ? 'yes' : 'no'})`)
+    sendToRenderer('agent:error', spaceId, conversationId, {
+      type: 'error',
+      errorType: 'interrupted',
+      error: errorMessage
     })
 
     // Determine if interrupted error should be sent
